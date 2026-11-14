@@ -21,7 +21,7 @@ import kotlin.concurrent.thread
 
 class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
-    private val model = "gemini-2.5-flash"
+    private val model = "gemini-3.8-flash"
     private val persona = "তুমি কারিমা, ব্যবহারকারীর ব্যক্তিগত ভয়েস অ্যাসিস্ট্যান্ট। " +
         "ব্যবহারকারী যে ভাষায় কথা বলে সেই ভাষায় ছোট ও সহজ উত্তর দাও। " +
         "উত্তরে মার্কডাউন চিহ্ন (*, #) ব্যবহার করবে না।"
