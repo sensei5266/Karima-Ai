@@ -21,9 +21,12 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -49,7 +52,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         "[[sms:নাম বা নম্বর|বার্তা]] SMS; " +
         "[[whatsapp:নাম বা নম্বর|বার্তা]] WhatsApp মেসেজ; " +
         "[[volume:up]] বা [[volume:down]] ভলিউম। " +
-        "কাজের আগে এক বাক্যে বলো কী করছো। শুধু প্রশ্ন বা গল্প করলে কোনো ট্যাগ দেবে না।"
+        "কাজের আগে এক বাক্যে বলো কী করছো। শুধু প্রশ্ন বা গল্প করলে কোনো ট্যাগ দেবে না। " +
+        "ইংরেজি নাম বা শব্দ সবসময় ইংরেজি অক্ষরে লিখবে, যেমন YouTube, Rahim, WhatsApp।"
 
     private val persona: String
         get() = "তুমি কারিমা, ব্যবহারকারীর ব্যক্তিগত ভয়েস অ্যাসিস্ট্যান্ট। " +
@@ -65,11 +69,17 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private lateinit var micBtn: Button
     private lateinit var keyPanel: LinearLayout
     private lateinit var keyInput: EditText
+    private lateinit var msgInput: EditText
+    private lateinit var langChip: TextView
     private var tts: TextToSpeech? = null
     private var recognizer: SpeechRecognizer? = null
     private var pulse: ObjectAnimator? = null
     private val history = JSONArray()
     private var models: List<String>? = null
+    private var voiceLang = "bn-BD"
+
+    private var gen = 0
+    private val speakList = mutableListOf<Pair<String, Boolean>>()
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -77,6 +87,12 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         GradientDrawable().apply {
             setColor(Color.parseColor(color))
             cornerRadius = radius
+        }
+
+    private fun circleBg(color: String): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor(color))
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -88,7 +104,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(36), dp(16), dp(16))
+            setPadding(dp(16), dp(36), dp(16), dp(12))
             setBackgroundColor(Color.parseColor("#0B0F1A"))
         }
 
@@ -124,6 +140,22 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
         }
+        langChip = TextView(this).apply {
+            text = "🎙 বাংলা"
+            textSize = 14f
+            setTextColor(Color.parseColor("#38BDF8"))
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            background = roundBg("#1E293B", dp(20).toFloat())
+            setOnClickListener {
+                if (voiceLang == "bn-BD") {
+                    voiceLang = "en-US"
+                    text = "🎙 English"
+                } else {
+                    voiceLang = "bn-BD"
+                    text = "🎙 বাংলা"
+                }
+            }
+        }
         val gear = TextView(this).apply {
             text = "⚙"
             textSize = 26f
@@ -138,6 +170,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(title, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(langChip)
             addView(gear)
         }
 
@@ -153,7 +186,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             ).apply { shape = GradientDrawable.OVAL }
         }
         status = TextView(this).apply {
-            text = "ট্যাপ করে কথা বলুন"
+            text = "ট্যাপ করে কথা বলুন বা লিখুন"
             textSize = 14f
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#94A3B8"))
@@ -162,15 +195,49 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll = ScrollView(this).apply { addView(chat) }
 
+        msgInput = EditText(this).apply {
+            hint = "মেসেজ লিখুন..."
+            setHintTextColor(Color.GRAY)
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = EditorInfo.IME_ACTION_SEND
+            maxLines = 1
+            background = roundBg("#1E293B", dp(26).toFloat())
+            setPadding(dp(18), dp(12), dp(18), dp(12))
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_SEND) {
+                    sendTyped()
+                    true
+                } else false
+            }
+        }
+        val sendBtn = Button(this).apply {
+            text = "➤"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            setPadding(0, 0, 0, 0)
+            minimumWidth = 0
+            minimumHeight = 0
+            background = circleBg("#7C3AED")
+            setOnClickListener { sendTyped() }
+        }
         micBtn = Button(this).apply {
             text = "🎤"
-            textSize = 30f
+            textSize = 24f
             setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#2563EB"))
-            }
+            setPadding(0, 0, 0, 0)
+            minimumWidth = 0
+            minimumHeight = 0
+            background = circleBg("#2563EB")
             setOnClickListener { listen() }
+        }
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(msgInput, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(sendBtn, LinearLayout.LayoutParams(dp(50), dp(50)).apply { leftMargin = dp(8) })
+            addView(micBtn, LinearLayout.LayoutParams(dp(56), dp(56)).apply { leftMargin = dp(8) })
         }
 
         root.addView(header)
@@ -181,25 +248,76 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             bottomMargin = dp(6)
         })
         root.addView(status, LinearLayout.LayoutParams(-1, -2))
-        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(8) })
-        root.addView(micBtn, LinearLayout.LayoutParams(dp(72), dp(72)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f).apply {
             topMargin = dp(8)
+            bottomMargin = dp(8)
         })
+        root.addView(bottom, LinearLayout.LayoutParams(-1, -2))
         setContentView(root)
 
         tts = TextToSpeech(this, this)
-        add("কারিমা", "হ্যালো! নিচের মাইক বাটন চেপে কথা বলুন। আমি এখন টর্চ, অ্যালার্ম, টাইমার, অ্যাপ খোলা, কল, SMS আর WhatsApp-এও সাহায্য করতে পারি।")
+        add("কারিমা", "হ্যালো! নিচের মাইক চেপে কথা বলুন, অথবা লিখে ➤ চাপুন।")
     }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            val r = tts?.setLanguage(Locale("bn", "BD"))
-            if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) {
-                tts?.setLanguage(Locale.getDefault())
-            }
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(id: String?) {}
+                override fun onDone(id: String?) {
+                    if (id == "g$gen") runOnUiThread { speakNext() }
+                }
+                override fun onError(id: String?) {
+                    if (id == "g$gen") runOnUiThread { speakNext() }
+                }
+            })
         }
     }
+
+    // ---------- মিশ্র ভাষায় পড়া (বাংলা + ইংরেজি) ----------
+
+    private fun segments(text: String): List<Pair<String, Boolean>> {
+        val out = mutableListOf<Pair<String, Boolean>>()
+        val sb = StringBuilder()
+        var curEn: Boolean? = null
+        for (ch in text) {
+            val isEn = ch in 'A'..'Z' || ch in 'a'..'z'
+            val isBn = ch.code in 0x0980..0x09FF
+            if ((isEn || isBn) && curEn != null && curEn != isEn) {
+                if (sb.isNotBlank()) out.add(sb.toString().trim() to (curEn ?: false))
+                sb.clear()
+            }
+            if (isEn || isBn) curEn = isEn
+            sb.append(ch)
+        }
+        if (sb.isNotBlank()) out.add(sb.toString().trim() to (curEn ?: false))
+        return out
+    }
+
+    private fun stopSpeaking() {
+        gen++
+        speakList.clear()
+        tts?.stop()
+    }
+
+    private fun speakMixed(raw: String) {
+        stopSpeaking()
+        val text = raw.replace(Regex("[*#`_]"), "")
+        speakList.addAll(segments(text).filter { seg -> seg.first.any { it.isLetterOrDigit() } })
+        speakNext()
+    }
+
+    private fun speakNext() {
+        if (speakList.isEmpty()) return
+        val seg = speakList.removeAt(0)
+        val en = seg.second
+        val r = tts?.setLanguage(if (en) Locale.US else Locale("bn", "BD"))
+        if (!en && (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED)) {
+            tts?.setLanguage(Locale.getDefault())
+        }
+        tts?.speak(seg.first, TextToSpeech.QUEUE_FLUSH, null, "g$gen")
+    }
+
+    // ---------- স্ক্রিন ----------
 
     private fun startPulse() {
         pulse?.cancel()
@@ -219,7 +337,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         pulse?.cancel()
         avatar.scaleX = 1f
         avatar.scaleY = 1f
-        status.text = "ট্যাপ করে কথা বলুন"
+        status.text = "ট্যাপ করে কথা বলুন বা লিখুন"
     }
 
     private fun add(who: String, text: String) {
@@ -246,6 +364,18 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
+    private fun sendTyped() {
+        val t = msgInput.text.toString().trim()
+        if (t.isEmpty()) return
+        msgInput.setText("")
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(msgInput.windowToken, 0)
+        stopSpeaking()
+        add("আপনি", t)
+        status.text = "ভাবছি..."
+        ask(t)
+    }
+
     // ---------- ফোন কন্ট্রোল ----------
 
     private val tagRegex = Regex("""\[\[(\w+):([^\]]*)\]\]""")
@@ -257,7 +387,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         val clean = tagRegex.replace(reply, "").trim()
         val shown = if (clean.isBlank()) "ঠিক আছে।" else clean
         add("কারিমা", shown)
-        tts?.speak(shown.replace(Regex("[*#`]"), ""), TextToSpeech.QUEUE_FLUSH, null, "k")
+        speakMixed(shown)
         for ((name, value) in tags) {
             val err = act(name, value)
             if (err != null) add("সিস্টেম", err)
@@ -415,7 +545,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             add("সিস্টেম", "এই ফোনে স্পিচ রিকগনিশন পাওয়া যায়নি।")
             return
         }
-        tts?.stop()
+        stopSpeaking()
         recognizer?.destroy()
         recognizer = SpeechRecognizer.createSpeechRecognizer(this)
         recognizer?.setRecognitionListener(object : RecognitionListener {
@@ -445,7 +575,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         })
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "bn-BD")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, voiceLang)
         }
         recognizer?.startListening(i)
     }
