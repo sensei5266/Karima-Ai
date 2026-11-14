@@ -44,6 +44,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private var recognizer: SpeechRecognizer? = null
     private var pulse: ObjectAnimator? = null
     private val history = JSONArray()
+    private var models: List<String>? = null
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -80,6 +81,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             setOnClickListener {
                 getSharedPreferences("k", MODE_PRIVATE).edit()
                     .putString("key", keyInput.text.toString().trim()).apply()
+                models = null
                 Toast.makeText(this@MainActivity, "সেভ হয়েছে", Toast.LENGTH_SHORT).show()
                 keyPanel.visibility = View.GONE
             }
@@ -263,6 +265,33 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         recognizer?.startListening(i)
     }
 
+    private fun pickModels(key: String): List<String> {
+        val found = mutableListOf<String>()
+        try {
+            val c = URL("https://generativelanguage.googleapis.com/v1beta/models?pageSize=100")
+                .openConnection() as HttpURLConnection
+            c.setRequestProperty("x-goog-api-key", key)
+            c.connectTimeout = 8000
+            c.readTimeout = 8000
+            if (c.responseCode in 200..299) {
+                val arr = JSONObject(c.inputStream.bufferedReader().readText()).getJSONArray("models")
+                for (i in 0 until arr.length()) {
+                    val m = arr.getJSONObject(i)
+                    val name = m.getString("name").removePrefix("models/")
+                    val methods = m.optJSONArray("supportedGenerationMethods")?.toString() ?: ""
+                    val bad = listOf("image", "tts", "live", "embed", "audio", "robotics", "computer")
+                    if (name.contains("flash") && methods.contains("generateContent") &&
+                        bad.none { name.contains(it) }
+                    ) found.add(name)
+                }
+            }
+        } catch (e: Exception) {
+        }
+        val list = mutableListOf(model)
+        list.addAll(found.sortedDescending().filter { it != model }.take(4))
+        return list
+    }
+
     private fun ask(userText: String) {
         val key = getSharedPreferences("k", MODE_PRIVATE).getString("key", "") ?: ""
         if (key.isBlank()) {
@@ -275,8 +304,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
         thread {
             var lastErr = ""
-            val tries = listOf(model, model, "gemini-3.8-flash-lite", model)
-            for (m in tries) {
+            val list = models ?: pickModels(key).also { models = it }
+            for (m in list) {
                 try {
                     val body = JSONObject()
                         .put("system_instruction", JSONObject()
@@ -289,8 +318,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                     c.setRequestProperty("Content-Type", "application/json")
                     c.setRequestProperty("x-goog-api-key", key)
                     c.doOutput = true
-                    c.connectTimeout = 15000
-                    c.readTimeout = 30000
+                    c.connectTimeout = 10000
+                    c.readTimeout = 20000
                     c.outputStream.use { it.write(body.toString().toByteArray()) }
 
                     val code = c.responseCode
@@ -309,12 +338,15 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                         }
                         return@thread
                     }
-                    lastErr = "HTTP $code"
+                    val msg = try {
+                        JSONObject(resp).getJSONObject("error").getString("message").take(100)
+                    } catch (e: Exception) { "" }
+                    lastErr = "$m: HTTP $code $msg"
                     if (code != 503 && code != 429 && code != 500 && code != 404) break
                 } catch (e: Exception) {
-                    lastErr = e.message ?: "অজানা সমস্যা"
+                    lastErr = "$m: ${e.message ?: "অজানা সমস্যা"}"
                 }
-                Thread.sleep(2500)
+                Thread.sleep(1000)
             }
             history.remove(history.length() - 1)
             runOnUiThread {
