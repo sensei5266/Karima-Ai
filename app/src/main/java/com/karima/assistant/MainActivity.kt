@@ -23,15 +23,19 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.concurrent.thread
 
 class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     private val model = "gemini-3.8-flash"
-    private val persona = "তুমি কারিমা, ব্যবহারকারীর ব্যক্তিগত ভয়েস অ্যাসিস্ট্যান্ট। " +
-        "ব্যবহারকারী যে ভাষায় কথা বলে সেই ভাষায় ছোট ও সহজ উত্তর দাও। " +
-        "উত্তরে মার্কডাউন চিহ্ন (*, #) ব্যবহার করবে না।"
+    private val persona: String
+        get() = "তুমি কারিমা, ব্যবহারকারীর ব্যক্তিগত ভয়েস অ্যাসিস্ট্যান্ট। " +
+            "ব্যবহারকারী যে ভাষায় কথা বলে সেই ভাষায় ছোট ও সহজ উত্তর দাও। " +
+            "উত্তরে মার্কডাউন চিহ্ন (*, #) ব্যবহার করবে না। এখনকার তারিখ ও সময়: " +
+            SimpleDateFormat("EEEE, d MMMM yyyy, hh:mm a", Locale.ENGLISH).format(Date())
 
     private lateinit var chat: LinearLayout
     private lateinit var scroll: ScrollView
