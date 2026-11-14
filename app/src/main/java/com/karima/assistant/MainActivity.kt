@@ -10,7 +10,13 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.media.AudioManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.AlarmClock
+import android.provider.ContactsContract
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -31,10 +37,25 @@ import kotlin.concurrent.thread
 class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     private val model = "gemini-3.8-flash"
+
+    private val actionHelp =
+        " তুমি ফোনে কাজও করতে পারো। ব্যবহারকারী স্পষ্টভাবে কোনো কাজ করতে বললে উত্তরের একদম শেষে " +
+        "ঠিক এই ফরম্যাটে ট্যাগ লিখবে: " +
+        "[[torch:on]] বা [[torch:off]] (টর্চ); " +
+        "[[alarm:HH:MM]] ২৪ ঘণ্টার সময়ে অ্যালার্ম, যেমন [[alarm:06:30]]; " +
+        "[[timer:সেকেন্ড]] টাইমার, যেমন ৫ মিনিট হলে [[timer:300]]; " +
+        "[[open:অ্যাপের ইংরেজি নাম]] অ্যাপ খোলা, যেমন [[open:YouTube]]; " +
+        "[[call:নাম বা নম্বর]] কল; " +
+        "[[sms:নাম বা নম্বর|বার্তা]] SMS; " +
+        "[[whatsapp:নাম বা নম্বর|বার্তা]] WhatsApp মেসেজ; " +
+        "[[volume:up]] বা [[volume:down]] ভলিউম। " +
+        "কাজের আগে এক বাক্যে বলো কী করছো। শুধু প্রশ্ন বা গল্প করলে কোনো ট্যাগ দেবে না।"
+
     private val persona: String
         get() = "তুমি কারিমা, ব্যবহারকারীর ব্যক্তিগত ভয়েস অ্যাসিস্ট্যান্ট। " +
             "ব্যবহারকারী যে ভাষায় কথা বলে সেই ভাষায় ছোট ও সহজ উত্তর দাও। " +
-            "উত্তরে মার্কডাউন চিহ্ন (*, #) ব্যবহার করবে না। এখনকার তারিখ ও সময়: " +
+            "উত্তরে মার্কডাউন চিহ্ন (*, #) ব্যবহার করবে না।" + actionHelp +
+            " এখনকার তারিখ ও সময়: " +
             SimpleDateFormat("EEEE, d MMMM yyyy, hh:mm a", Locale.ENGLISH).format(Date())
 
     private lateinit var chat: LinearLayout
@@ -168,7 +189,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         setContentView(root)
 
         tts = TextToSpeech(this, this)
-        add("কারিমা", "হ্যালো! নিচের মাইক বাটন চেপে কথা বলুন।")
+        add("কারিমা", "হ্যালো! নিচের মাইক বাটন চেপে কথা বলুন। আমি এখন টর্চ, অ্যালার্ম, টাইমার, অ্যাপ খোলা, কল, SMS আর WhatsApp-এও সাহায্য করতে পারি।")
     }
 
     override fun onInit(status: Int) {
@@ -225,6 +246,166 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
+    // ---------- ফোন কন্ট্রোল ----------
+
+    private val tagRegex = Regex("""\[\[(\w+):([^\]]*)\]\]""")
+
+    private fun handleReply(reply: String) {
+        val tags = tagRegex.findAll(reply)
+            .map { it.groupValues[1] to it.groupValues[2].trim() }
+            .toList()
+        val clean = tagRegex.replace(reply, "").trim()
+        val shown = if (clean.isBlank()) "ঠিক আছে।" else clean
+        add("কারিমা", shown)
+        tts?.speak(shown.replace(Regex("[*#`]"), ""), TextToSpeech.QUEUE_FLUSH, null, "k")
+        for ((name, value) in tags) {
+            val err = act(name, value)
+            if (err != null) add("সিস্টেম", err)
+        }
+    }
+
+    private fun act(name: String, v: String): String? {
+        return try {
+            when (name) {
+                "torch" -> torch(v == "on")
+                "alarm" -> setAlarm(v)
+                "timer" -> setTimer(v)
+                "open" -> openApp(v)
+                "call" -> dial(v)
+                "sms" -> sendSms(v)
+                "whatsapp" -> sendWhatsapp(v)
+                "volume" -> volume(v == "up")
+                else -> "অজানা কাজ: $name"
+            }
+        } catch (e: Exception) {
+            "কাজটি করা যায়নি: ${e.message}"
+        }
+    }
+
+    private fun torch(on: Boolean): String? {
+        val cm = getSystemService(CAMERA_SERVICE) as CameraManager
+        val id = cm.cameraIdList.firstOrNull {
+            cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+        } ?: return "এই ফোনে ফ্ল্যাশলাইট পাওয়া যায়নি।"
+        cm.setTorchMode(id, on)
+        return null
+    }
+
+    private fun setAlarm(v: String): String? {
+        val p = v.split(":")
+        val h = p[0].trim().toInt()
+        val m = p[1].trim().toInt()
+        val i = Intent(AlarmClock.ACTION_SET_ALARM)
+            .putExtra(AlarmClock.EXTRA_HOUR, h)
+            .putExtra(AlarmClock.EXTRA_MINUTES, m)
+            .putExtra(AlarmClock.EXTRA_MESSAGE, "Karima")
+            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        startActivity(i)
+        return null
+    }
+
+    private fun setTimer(v: String): String? {
+        val sec = v.trim().toInt()
+        val i = Intent(AlarmClock.ACTION_SET_TIMER)
+            .putExtra(AlarmClock.EXTRA_LENGTH, sec)
+            .putExtra(AlarmClock.EXTRA_MESSAGE, "Karima")
+            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+        startActivity(i)
+        return null
+    }
+
+    private fun openApp(nameWanted: String): String? {
+        val pm = packageManager
+        val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = pm.queryIntentActivities(main, 0)
+        val q = nameWanted.trim().lowercase()
+        val hit = apps.firstOrNull { it.loadLabel(pm).toString().lowercase() == q }
+            ?: apps.firstOrNull { it.loadLabel(pm).toString().lowercase().contains(q) }
+            ?: return "\"$nameWanted\" নামে কোনো অ্যাপ খুঁজে পাইনি।"
+        val launch = pm.getLaunchIntentForPackage(hit.activityInfo.packageName)
+            ?: return "অ্যাপটি খোলা যায়নি।"
+        startActivity(launch)
+        return null
+    }
+
+    private fun volume(up: Boolean): String? {
+        val am = getSystemService(AUDIO_SERVICE) as AudioManager
+        repeat(3) {
+            am.adjustStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+                AudioManager.FLAG_SHOW_UI
+            )
+        }
+        return null
+    }
+
+    private fun contactPermissionMsg(q: String): String? {
+        val isName = q.any { it.isLetter() }
+        if (isName && checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 2)
+            return "কন্ট্যাক্ট দেখার অনুমতি দিন, তারপর আবার বলুন।"
+        }
+        return null
+    }
+
+    private fun numberFor(q: String): String? {
+        val query = q.trim()
+        if (query.none { it.isLetter() }) {
+            val d = query.filter { it.isDigit() || it == '+' }
+            return if (d.length >= 5) d else null
+        }
+        contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " LIKE ?",
+            arrayOf("%$query%"),
+            null
+        )?.use {
+            if (it.moveToFirst()) return it.getString(0)
+        }
+        return null
+    }
+
+    private fun dial(target: String): String? {
+        contactPermissionMsg(target)?.let { return it }
+        val n = numberFor(target) ?: return "\"$target\" নামে কোনো নম্বর পাইনি।"
+        startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(n))))
+        return null
+    }
+
+    private fun sendSms(v: String): String? {
+        val parts = v.split("|", limit = 2)
+        val target = parts[0].trim()
+        val msg = parts.getOrElse(1) { "" }.trim()
+        contactPermissionMsg(target)?.let { return it }
+        val n = numberFor(target) ?: return "\"$target\" নামে কোনো নম্বর পাইনি।"
+        val i = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(n)))
+            .putExtra("sms_body", msg)
+        startActivity(i)
+        return null
+    }
+
+    private fun waNumber(n: String): String {
+        val d = n.filter { it.isDigit() || it == '+' }
+        if (d.startsWith("+")) return d.drop(1)
+        if (d.startsWith("01") && d.length == 11) return "88$d"
+        return d
+    }
+
+    private fun sendWhatsapp(v: String): String? {
+        val parts = v.split("|", limit = 2)
+        val target = parts[0].trim()
+        val msg = parts.getOrElse(1) { "" }.trim()
+        contactPermissionMsg(target)?.let { return it }
+        val n = numberFor(target) ?: return "\"$target\" নামে কোনো নম্বর পাইনি।"
+        val url = "https://wa.me/" + waNumber(n) + "?text=" + Uri.encode(msg)
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        return null
+    }
+
+    // ---------- শোনা ----------
+
     private fun listen() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
@@ -268,6 +449,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
         recognizer?.startListening(i)
     }
+
+    // ---------- AI ----------
 
     private fun pickModels(key: String): List<String> {
         val found = mutableListOf<String>()
@@ -337,8 +520,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                             .put("parts", JSONArray().put(JSONObject().put("text", reply))))
                         runOnUiThread {
                             idle()
-                            add("কারিমা", reply)
-                            tts?.speak(reply.replace(Regex("[*#`]"), ""), TextToSpeech.QUEUE_FLUSH, null, "k")
+                            handleReply(reply)
                         }
                         return@thread
                     }
