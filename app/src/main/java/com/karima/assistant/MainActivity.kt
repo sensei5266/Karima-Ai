@@ -1,16 +1,23 @@
 package com.karima.assistant
 
 import android.Manifest
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.text.InputType
+import android.view.Gravity
+import android.view.View
 import android.widget.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,64 +33,136 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         "ব্যবহারকারী যে ভাষায় কথা বলে সেই ভাষায় ছোট ও সহজ উত্তর দাও। " +
         "উত্তরে মার্কডাউন চিহ্ন (*, #) ব্যবহার করবে না।"
 
-    private lateinit var log: TextView
+    private lateinit var chat: LinearLayout
     private lateinit var scroll: ScrollView
+    private lateinit var avatar: TextView
+    private lateinit var status: TextView
     private lateinit var micBtn: Button
+    private lateinit var keyPanel: LinearLayout
     private lateinit var keyInput: EditText
     private var tts: TextToSpeech? = null
     private var recognizer: SpeechRecognizer? = null
+    private var pulse: ObjectAnimator? = null
     private val history = JSONArray()
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun roundBg(color: String, radius: Float): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(Color.parseColor(color))
+            cornerRadius = radius
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val pad = (16 * resources.displayMetrics.density).toInt()
+        window.statusBarColor = Color.parseColor("#0B0F1A")
+        window.navigationBarColor = Color.parseColor("#0B0F1A")
+
+        val savedKey = getSharedPreferences("k", MODE_PRIVATE).getString("key", "") ?: ""
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad * 2, pad, pad)
+            setPadding(dp(16), dp(36), dp(16), dp(16))
             setBackgroundColor(Color.parseColor("#0B0F1A"))
         }
-        val title = TextView(this).apply {
-            text = "Karima"
-            textSize = 26f
-            setTextColor(Color.WHITE)
-        }
-        log = TextView(this).apply {
-            textSize = 16f
-            setTextColor(Color.parseColor("#E0E6F0"))
-        }
-        scroll = ScrollView(this).apply { addView(log) }
 
         keyInput = EditText(this).apply {
             hint = "Gemini API key"
             setHintTextColor(Color.GRAY)
             setTextColor(Color.WHITE)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(getSharedPreferences("k", MODE_PRIVATE).getString("key", ""))
+            setText(savedKey)
         }
         val saveBtn = Button(this).apply {
             text = "Key সেভ করুন"
+            setTextColor(Color.WHITE)
+            background = roundBg("#334155", dp(12).toFloat())
             setOnClickListener {
                 getSharedPreferences("k", MODE_PRIVATE).edit()
                     .putString("key", keyInput.text.toString().trim()).apply()
                 Toast.makeText(this@MainActivity, "সেভ হয়েছে", Toast.LENGTH_SHORT).show()
+                keyPanel.visibility = View.GONE
             }
         }
+        keyPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (savedKey.isBlank()) View.VISIBLE else View.GONE
+            addView(keyInput)
+            addView(saveBtn)
+        }
+
+        val title = TextView(this).apply {
+            text = "Karima"
+            textSize = 24f
+            setTextColor(Color.WHITE)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val gear = TextView(this).apply {
+            text = "⚙"
+            textSize = 26f
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(dp(12), dp(4), dp(4), dp(4))
+            setOnClickListener {
+                keyPanel.visibility =
+                    if (keyPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            }
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(title, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(gear)
+        }
+
+        avatar = TextView(this).apply {
+            text = "K"
+            textSize = 40f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            typeface = Typeface.DEFAULT_BOLD
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.parseColor("#38BDF8"), Color.parseColor("#7C3AED"))
+            ).apply { shape = GradientDrawable.OVAL }
+        }
+        status = TextView(this).apply {
+            text = "ট্যাপ করে কথা বলুন"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#94A3B8"))
+        }
+
+        chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        scroll = ScrollView(this).apply { addView(chat) }
+
         micBtn = Button(this).apply {
-            text = "🎤 কথা বলুন"
-            textSize = 18f
+            text = "🎤"
+            textSize = 30f
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#2563EB"))
+            }
             setOnClickListener { listen() }
         }
 
-        root.addView(title)
-        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(keyInput)
-        root.addView(saveBtn)
-        root.addView(micBtn)
+        root.addView(header)
+        root.addView(keyPanel)
+        root.addView(avatar, LinearLayout.LayoutParams(dp(96), dp(96)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(12)
+            bottomMargin = dp(6)
+        })
+        root.addView(status, LinearLayout.LayoutParams(-1, -2))
+        root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(8) })
+        root.addView(micBtn, LinearLayout.LayoutParams(dp(72), dp(72)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(8)
+        })
         setContentView(root)
 
         tts = TextToSpeech(this, this)
-        add("কারিমা", "হ্যালো! মাইক বাটন চেপে কথা বলুন।")
+        add("কারিমা", "হ্যালো! নিচের মাইক বাটন চেপে কথা বলুন।")
     }
 
     override fun onInit(status: Int) {
@@ -95,8 +174,48 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun startPulse() {
+        pulse?.cancel()
+        pulse = ObjectAnimator.ofPropertyValuesHolder(
+            avatar,
+            PropertyValuesHolder.ofFloat("scaleX", 1f, 1.15f),
+            PropertyValuesHolder.ofFloat("scaleY", 1f, 1.15f)
+        ).apply {
+            duration = 700
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            start()
+        }
+    }
+
+    private fun idle() {
+        pulse?.cancel()
+        avatar.scaleX = 1f
+        avatar.scaleY = 1f
+        status.text = "ট্যাপ করে কথা বলুন"
+    }
+
     private fun add(who: String, text: String) {
-        log.append("\n$who: $text\n")
+        val isUser = who == "আপনি"
+        val isSys = who == "সিস্টেম" || who == "ত্রুটি"
+        val color = when {
+            isUser -> "#2563EB"
+            isSys -> "#7F1D1D"
+            else -> "#1E293B"
+        }
+        val tv = TextView(this).apply {
+            this.text = text
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = roundBg(color, dp(16).toFloat())
+        }
+        val lp = LinearLayout.LayoutParams(-2, -2).apply {
+            topMargin = dp(5)
+            bottomMargin = dp(5)
+            gravity = if (isUser) Gravity.END else Gravity.START
+        }
+        chat.addView(tv, lp)
         scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
@@ -113,21 +232,26 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         recognizer?.destroy()
         recognizer = SpeechRecognizer.createSpeechRecognizer(this)
         recognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(p: Bundle?) { micBtn.text = "🎧 শুনছি..." }
+            override fun onReadyForSpeech(p: Bundle?) {
+                status.text = "শুনছি..."
+                startPulse()
+            }
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(v: Float) {}
             override fun onBufferReceived(b: ByteArray?) {}
-            override fun onEndOfSpeech() { micBtn.text = "🎤 কথা বলুন" }
+            override fun onEndOfSpeech() { status.text = "ভাবছি..." }
             override fun onPartialResults(p: Bundle?) {}
             override fun onEvent(t: Int, p: Bundle?) {}
             override fun onError(e: Int) {
-                micBtn.text = "🎤 কথা বলুন"
+                idle()
                 add("সিস্টেম", "শুনতে পাইনি (কোড $e), আবার চেষ্টা করুন।")
             }
             override fun onResults(r: Bundle?) {
-                micBtn.text = "🎤 কথা বলুন"
                 val said = r?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                if (said.isNullOrBlank()) return
+                if (said.isNullOrBlank()) {
+                    idle()
+                    return
+                }
                 add("আপনি", said)
                 ask(said)
             }
@@ -142,7 +266,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private fun ask(userText: String) {
         val key = getSharedPreferences("k", MODE_PRIVATE).getString("key", "") ?: ""
         if (key.isBlank()) {
-            add("সিস্টেম", "আগে API key বসিয়ে সেভ করুন।")
+            idle()
+            add("সিস্টেম", "আগে ⚙ চেপে API key বসিয়ে সেভ করুন।")
             return
         }
         history.put(JSONObject().put("role", "user")
@@ -178,6 +303,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                         history.put(JSONObject().put("role", "model")
                             .put("parts", JSONArray().put(JSONObject().put("text", reply))))
                         runOnUiThread {
+                            idle()
                             add("কারিমা", reply)
                             tts?.speak(reply.replace(Regex("[*#`]"), ""), TextToSpeech.QUEUE_FLUSH, null, "k")
                         }
@@ -191,11 +317,15 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                 Thread.sleep(2500)
             }
             history.remove(history.length() - 1)
-            runOnUiThread { add("ত্রুটি", "$lastErr — একটু পরে আবার বলুন।") }
+            runOnUiThread {
+                idle()
+                add("ত্রুটি", "$lastErr — একটু পরে আবার বলুন।")
+            }
         }
     }
 
     override fun onDestroy() {
+        pulse?.cancel()
         recognizer?.destroy()
         tts?.shutdown()
         super.onDestroy()
