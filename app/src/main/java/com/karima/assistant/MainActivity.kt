@@ -113,6 +113,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private lateinit var keyInput: EditText
     private lateinit var msgInput: EditText
     private lateinit var langChip: TextView
+    private lateinit var wakeBtn: Button
     private var tts: TextToSpeech? = null
     private var recognizer: SpeechRecognizer? = null
     private var pulse: ObjectAnimator? = null
@@ -209,6 +210,53 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
     }
 
+    // ---------- ওয়েক-ওয়ার্ড ----------
+
+    private fun startWake() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            add("সিস্টেম", "আগে মাইকের অনুমতি দিন, তারপর ওয়েক-ওয়ার্ড চালু করুন।")
+            prefs().edit().putBoolean("wake", false).apply()
+            return
+        }
+        try {
+            startForegroundService(Intent(this, KarimaListenService::class.java))
+            prefs().edit().putBoolean("wake", true).apply()
+            wakeBtn.text = "ওয়েক-ওয়ার্ড: চালু (বন্ধ করতে চাপুন)"
+        } catch (e: Exception) {
+            add("সিস্টেম", "ওয়েক-ওয়ার্ড চালু করা যায়নি: ${e.message}")
+        }
+    }
+
+    private fun stopWake() {
+        stopService(Intent(this, KarimaListenService::class.java))
+        prefs().edit().putBoolean("wake", false).apply()
+        wakeBtn.text = "ওয়েক-ওয়ার্ড চালু করুন"
+    }
+
+    private fun checkWake(i: Intent?) {
+        if (i?.getBooleanExtra("wake", false) == true) {
+            i.removeExtra("wake")
+            ui.postDelayed({ listen() }, 900L)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        checkWake(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        AppState.visible = true
+        KarimaListenService.current?.pauseForApp()
+    }
+
+    override fun onPause() {
+        AppState.visible = false
+        super.onPause()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.parseColor("#0B0F1A")
@@ -257,13 +305,64 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                 startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             }
         }
-        keyPanel = LinearLayout(this).apply {
+        wakeBtn = Button(this).apply {
+            text = if (prefs().getBoolean("wake", false)) "ওয়েক-ওয়ার্ড: চালু (বন্ধ করতে চাপুন)"
+            else "ওয়েক-ওয়ার্ড চালু করুন"
+            setTextColor(Color.WHITE)
+            background = roundBg("#0EA5E9", dp(12).toFloat())
+            setOnClickListener {
+                if (prefs().getBoolean("wake", false)) stopWake() else startWake()
+            }
+        }
+        val overlayBtn = Button(this).apply {
+            text = "অন্য অ্যাপের ওপরে দেখানোর অনুমতি"
+            setTextColor(Color.WHITE)
+            background = roundBg("#334155", dp(12).toFloat())
+            setOnClickListener {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }
+        }
+        val batBtn = Button(this).apply {
+            text = "ব্যাটারি সীমাবদ্ধতা বন্ধ করুন"
+            setTextColor(Color.WHITE)
+            background = roundBg("#334155", dp(12).toFloat())
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+        }
+        val assistBtn = Button(this).apply {
+            text = "ডিফল্ট অ্যাসিস্ট্যান্ট সেট করুন"
+            setTextColor(Color.WHITE)
+            background = roundBg("#334155", dp(12).toFloat())
+            setOnClickListener {
+                try {
+                    startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+                } catch (e: Exception) {
+                    startActivity(Intent(Settings.ACTION_SETTINGS))
+                }
+            }
+        }
+        val panelItems = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            visibility = if (savedKey.isBlank()) View.VISIBLE else View.GONE
             addView(keyInput)
             addView(saveBtn)
             addView(accBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(notifBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(wakeBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(overlayBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(batBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(assistBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        }
+        val panelScroll = ScrollView(this).apply { addView(panelItems) }
+        keyPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (savedKey.isBlank()) View.VISIBLE else View.GONE
+            addView(panelScroll, LinearLayout.LayoutParams(-1, dp(300)))
         }
 
         val title = TextView(this).apply {
@@ -414,14 +513,19 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
         add("কারিমা", "হ্যালো! নিচের মাইক চেপে কথা বলুন, অথবা লিখে ➤ চাপুন।")
 
-        val need = listOf(
+        val need = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.READ_CONTACTS,
             Manifest.permission.CALL_PHONE,
             Manifest.permission.SEND_SMS,
             Manifest.permission.ANSWER_PHONE_CALLS
-        ).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 10)
+        )
+        if (Build.VERSION.SDK_INT >= 33) need.add(Manifest.permission.POST_NOTIFICATIONS)
+        val missing = need.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 10)
+
+        if (prefs().getBoolean("wake", false)) startWake()
+        checkWake(intent)
     }
 
     override fun onInit(status: Int) {
@@ -828,7 +932,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
         stopSpeaking()
         recognizer?.destroy()
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        recognizer = makeRecognizer(this)
         recognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(p: Bundle?) {
                 status.text = "শুনছি..."
