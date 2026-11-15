@@ -28,18 +28,27 @@ object AppState {
 }
 
 fun makeRecognizer(ctx: Context): SpeechRecognizer {
-    val list = ctx.packageManager.queryIntentServices(
-        Intent(RecognitionService.SERVICE_INTERFACE), 0
-    )
-    val pick = list.firstOrNull { it.serviceInfo.packageName == "com.google.android.googlequicksearchbox" }
-        ?: list.firstOrNull { it.serviceInfo.packageName != ctx.packageName }
-    return if (pick != null) {
-        SpeechRecognizer.createSpeechRecognizer(
-            ctx, ComponentName(pick.serviceInfo.packageName, pick.serviceInfo.name)
-        )
-    } else {
-        SpeechRecognizer.createSpeechRecognizer(ctx)
+    try {
+        val def = Settings.Secure.getString(ctx.contentResolver, "voice_recognition_service")
+        val cn = if (def.isNullOrBlank()) null else ComponentName.unflattenFromString(def)
+        if (cn != null && cn.packageName != ctx.packageName) {
+            return SpeechRecognizer.createSpeechRecognizer(ctx, cn)
+        }
+    } catch (e: Exception) {
     }
+    try {
+        val list = ctx.packageManager.queryIntentServices(
+            Intent(RecognitionService.SERVICE_INTERFACE), 0
+        )
+        val pick = list.firstOrNull { it.serviceInfo.packageName != ctx.packageName }
+        if (pick != null) {
+            return SpeechRecognizer.createSpeechRecognizer(
+                ctx, ComponentName(pick.serviceInfo.packageName, pick.serviceInfo.name)
+            )
+        }
+    } catch (e: Exception) {
+    }
+    return SpeechRecognizer.createSpeechRecognizer(ctx)
 }
 
 class KarimaListenService : Service() {
@@ -130,7 +139,7 @@ class KarimaListenService : Service() {
                 }
                 override fun onError(e: Int) {
                     langIdx++
-                    h.postDelayed({ loop() }, if (e == 8) 2500L else 600L)
+                    h.postDelayed({ loop() }, if (e == 8 || e == 12 || e == 13) 2500L else 600L)
                 }
                 override fun onResults(r: Bundle?) {
                     val matched = check(r?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION))
