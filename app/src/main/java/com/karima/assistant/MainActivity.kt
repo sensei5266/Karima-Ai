@@ -14,7 +14,10 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.media.AudioAttributes
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioTrack
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
@@ -32,6 +35,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.telecom.TelecomManager
 import android.telephony.SmsManager
 import android.text.InputType
+import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -114,6 +118,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private lateinit var msgInput: EditText
     private lateinit var langChip: TextView
     private lateinit var wakeBtn: Button
+    private lateinit var voiceBtn: Button
+    private lateinit var cloudBtn: Button
     private var tts: TextToSpeech? = null
     private var recognizer: SpeechRecognizer? = null
     private var pulse: ObjectAnimator? = null
@@ -125,6 +131,11 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     private var gen = 0
     private val speakList = mutableListOf<Pair<String, Boolean>>()
+
+    private val voices = listOf("Kore", "Aoede", "Leda", "Zephyr", "Callirrhoe", "Sulafat")
+    private var ttsModel: String? = null
+    private var cloudWarned = false
+    private var track: AudioTrack? = null
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -257,6 +268,196 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         super.onPause()
     }
 
+    // ---------- মেয়ের ভয়েস (Gemini) ----------
+
+    private fun voiceName(): String = prefs().getString("voice", "Kore") ?: "Kore"
+
+    private fun cloudOn(): Boolean = prefs().getBoolean("cloud", true)
+
+    private fun findTtsModel(key: String): String? {
+        ttsModel?.let { return it }
+        val found = mutableListOf<String>()
+        try {
+            val c = URL("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200")
+                .openConnection() as HttpURLConnection
+            c.setRequestProperty("x-goog-api-key", key)
+            c.connectTimeout = 8000
+            c.readTimeout = 8000
+            if (c.responseCode in 200..299) {
+                val arr = JSONObject(c.inputStream.bufferedReader().readText()).getJSONArray("models")
+                for (i in 0 until arr.length()) {
+                    val m = arr.getJSONObject(i)
+                    val name = m.getString("name").removePrefix("models/")
+                    val methods = m.optJSONArray("supportedGenerationMethods")?.toString() ?: ""
+                    if (name.contains("tts") && methods.contains("generateContent")) found.add(name)
+                }
+            }
+        } catch (e: Exception) {
+        }
+        val pick = found.sortedDescending().firstOrNull { it.contains("flash") }
+            ?: found.sortedDescending().firstOrNull()
+        ttsModel = pick
+        return pick
+    }
+
+    private fun fetchVoice(text: String, key: String): Pair<ByteArray, Int> {
+        val m = findTtsModel(key) ?: throw Exception("ভয়েস মডেল পাওয়া যায়নি")
+        val body = JSONObject()
+            .put("contents", JSONArray().put(JSONObject()
+                .put("parts", JSONArray().put(JSONObject().put("text", text)))))
+            .put("generationConfig", JSONObject()
+                .put("responseModalities", JSONArray().put("AUDIO"))
+                .put("speechConfig", JSONObject()
+                    .put("voiceConfig", JSONObject()
+                        .put("prebuiltVoiceConfig", JSONObject().put("voiceName", voiceName())))))
+        val c = URL("https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent")
+            .openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.setRequestProperty("Content-Type", "application/json")
+        c.setRequestProperty("x-goog-api-key", key)
+        c.doOutput = true
+        c.connectTimeout = 10000
+        c.readTimeout = 30000
+        c.outputStream.use { it.write(body.toString().toByteArray()) }
+        val code = c.responseCode
+        val stream = if (code in 200..299) c.inputStream else c.errorStream
+        val resp = stream.bufferedReader().readText()
+        if (code !in 200..299) throw Exception("HTTP $code")
+        val part = JSONObject(resp).getJSONArray("candidates").getJSONObject(0)
+            .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
+        val inline = part.optJSONObject("inlineData") ?: part.optJSONObject("inline_data")
+            ?: throw Exception("অডিও আসেনি")
+        val data = Base64.decode(inline.getString("data"), Base64.DEFAULT)
+        val mime = inline.optString("mimeType", inline.optString("mime_type", ""))
+        val rate = Regex("rate=(\\d+)").find(mime)?.groupValues?.get(1)?.toIntOrNull() ?: 24000
+        return Pair(data, rate)
+    }
+
+    private fun stopAudio() {
+        try {
+            track?.stop()
+            track?.release()
+        } catch (e: Exception) {
+        }
+        track = null
+    }
+
+    private fun playPcm(pcm: ByteArray, rate: Int) {
+        stopAudio()
+        try {
+            val t = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(rate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(pcm.size)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
+            t.write(pcm, 0, pcm.size)
+            t.play()
+            track = t
+        } catch (e: Exception) {
+            add("সিস্টেম", "ভয়েস বাজানো যায়নি: ${e.message}")
+        }
+    }
+
+    // ---------- মিশ্র ভাষায় পড়া (ফোনের ভয়েস, বাংলা + ইংরেজি) ----------
+
+    private fun segments(text: String): List<Pair<String, Boolean>> {
+        val out = mutableListOf<Pair<String, Boolean>>()
+        val sb = StringBuilder()
+        var curEn: Boolean? = null
+        for (ch in text) {
+            val isEn = ch in 'A'..'Z' || ch in 'a'..'z'
+            val isBn = ch.code in 0x0980..0x09FF
+            if ((isEn || isBn) && curEn != null && curEn != isEn) {
+                if (sb.isNotBlank()) out.add(sb.toString().trim() to (curEn ?: false))
+                sb.clear()
+            }
+            if (isEn || isBn) curEn = isEn
+            sb.append(ch)
+        }
+        if (sb.isNotBlank()) out.add(sb.toString().trim() to (curEn ?: false))
+        return out
+    }
+
+    private fun stopSpeaking() {
+        gen++
+        speakList.clear()
+        tts?.stop()
+        stopAudio()
+    }
+
+    private fun speakPhone(text: String) {
+        speakList.clear()
+        speakList.addAll(segments(text).filter { seg -> seg.first.any { it.isLetterOrDigit() } })
+        speakNext()
+    }
+
+    private fun speakMixed(raw: String) {
+        stopSpeaking()
+        val text = raw.replace(Regex("[*#`_]"), "").trim()
+        if (text.isEmpty()) return
+        val key = prefs().getString("key", "") ?: ""
+        if (!cloudOn() || key.isBlank()) {
+            speakPhone(text)
+            return
+        }
+        val myGen = gen
+        thread {
+            try {
+                val res = fetchVoice(text.take(600), key)
+                runOnUiThread { if (myGen == gen) playPcm(res.first, res.second) }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (myGen == gen) {
+                        if (!cloudWarned) {
+                            cloudWarned = true
+                            add("সিস্টেম", "মেয়ের ভয়েস পাওয়া যায়নি (${e.message}), ফোনের ভয়েস ব্যবহার করছি।")
+                        }
+                        speakPhone(text)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun speakNext() {
+        if (speakList.isEmpty()) return
+        val seg = speakList.removeAt(0)
+        val en = seg.second
+        val r = tts?.setLanguage(if (en) Locale.US else Locale("bn", "BD"))
+        if (!en && (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED)) {
+            tts?.setLanguage(Locale.getDefault())
+        }
+        tts?.speak(seg.first, TextToSpeech.QUEUE_FLUSH, null, "g$gen")
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(id: String?) {}
+                override fun onDone(id: String?) {
+                    if (id == "g$gen") runOnUiThread { speakNext() }
+                }
+                override fun onError(id: String?) {
+                    if (id == "g$gen") runOnUiThread { speakNext() }
+                }
+            })
+        }
+    }
+
+    // ---------- স্ক্রিন ----------
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.parseColor("#0B0F1A")
@@ -285,6 +486,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             setOnClickListener {
                 prefs().edit().putString("key", keyInput.text.toString().trim()).apply()
                 models = null
+                ttsModel = null
+                cloudWarned = false
                 Toast.makeText(this@MainActivity, "সেভ হয়েছে", Toast.LENGTH_SHORT).show()
                 keyPanel.visibility = View.GONE
             }
@@ -312,6 +515,28 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             background = roundBg("#0EA5E9", dp(12).toFloat())
             setOnClickListener {
                 if (prefs().getBoolean("wake", false)) stopWake() else startWake()
+            }
+        }
+        cloudBtn = Button(this).apply {
+            text = if (cloudOn()) "মেয়ের ভয়েস (ইন্টারনেট): চালু" else "মেয়ের ভয়েস (ইন্টারনেট): বন্ধ"
+            setTextColor(Color.WHITE)
+            background = roundBg("#DB2777", dp(12).toFloat())
+            setOnClickListener {
+                val now = !cloudOn()
+                prefs().edit().putBoolean("cloud", now).apply()
+                text = if (now) "মেয়ের ভয়েস (ইন্টারনেট): চালু" else "মেয়ের ভয়েস (ইন্টারনেট): বন্ধ"
+                speakMixed("হ্যালো, আমি কারিমা।")
+            }
+        }
+        voiceBtn = Button(this).apply {
+            text = "গলা: ${voiceName()} (বদলাতে চাপুন)"
+            setTextColor(Color.WHITE)
+            background = roundBg("#DB2777", dp(12).toFloat())
+            setOnClickListener {
+                val next = voices[(voices.indexOf(voiceName()) + 1) % voices.size]
+                prefs().edit().putString("voice", next).apply()
+                text = "গলা: $next (বদলাতে চাপুন)"
+                speakMixed("হ্যালো, আমি কারিমা। আমার এই গলা কেমন লাগছে?")
             }
         }
         val overlayBtn = Button(this).apply {
@@ -351,6 +576,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             orientation = LinearLayout.VERTICAL
             addView(keyInput)
             addView(saveBtn)
+            addView(cloudBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(voiceBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(accBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(notifBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(wakeBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
@@ -527,66 +754,6 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         if (prefs().getBoolean("wake", false)) startWake()
         checkWake(intent)
     }
-
-    override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(id: String?) {}
-                override fun onDone(id: String?) {
-                    if (id == "g$gen") runOnUiThread { speakNext() }
-                }
-                override fun onError(id: String?) {
-                    if (id == "g$gen") runOnUiThread { speakNext() }
-                }
-            })
-        }
-    }
-
-    // ---------- মিশ্র ভাষায় পড়া (বাংলা + ইংরেজি) ----------
-
-    private fun segments(text: String): List<Pair<String, Boolean>> {
-        val out = mutableListOf<Pair<String, Boolean>>()
-        val sb = StringBuilder()
-        var curEn: Boolean? = null
-        for (ch in text) {
-            val isEn = ch in 'A'..'Z' || ch in 'a'..'z'
-            val isBn = ch.code in 0x0980..0x09FF
-            if ((isEn || isBn) && curEn != null && curEn != isEn) {
-                if (sb.isNotBlank()) out.add(sb.toString().trim() to (curEn ?: false))
-                sb.clear()
-            }
-            if (isEn || isBn) curEn = isEn
-            sb.append(ch)
-        }
-        if (sb.isNotBlank()) out.add(sb.toString().trim() to (curEn ?: false))
-        return out
-    }
-
-    private fun stopSpeaking() {
-        gen++
-        speakList.clear()
-        tts?.stop()
-    }
-
-    private fun speakMixed(raw: String) {
-        stopSpeaking()
-        val text = raw.replace(Regex("[*#`_]"), "")
-        speakList.addAll(segments(text).filter { seg -> seg.first.any { it.isLetterOrDigit() } })
-        speakNext()
-    }
-
-    private fun speakNext() {
-        if (speakList.isEmpty()) return
-        val seg = speakList.removeAt(0)
-        val en = seg.second
-        val r = tts?.setLanguage(if (en) Locale.US else Locale("bn", "BD"))
-        if (!en && (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED)) {
-            tts?.setLanguage(Locale.getDefault())
-        }
-        tts?.speak(seg.first, TextToSpeech.QUEUE_FLUSH, null, "g$gen")
-    }
-
-    // ---------- স্ক্রিন ----------
 
     private fun startPulse() {
         pulse?.cancel()
@@ -1064,6 +1231,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         pulse?.cancel()
         recognizer?.destroy()
         tts?.shutdown()
+        stopAudio()
         super.onDestroy()
     }
 }
