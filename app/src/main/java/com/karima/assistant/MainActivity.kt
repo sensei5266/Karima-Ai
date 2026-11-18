@@ -49,6 +49,7 @@ import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.concurrent.thread
@@ -60,8 +61,11 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private val actionHelp =
         " তুমি ফোন ও স্ক্রিন নিয়ন্ত্রণ করতে পারো। ব্যবহারকারী কাজ করতে বললে উত্তরের শেষে এই ট্যাগগুলো " +
         "লিখবে (একাধিক হলে ক্রমানুসারে): " +
-        "[[torch:on]] বা [[torch:off]]; [[alarm:HH:MM]] (২৪ ঘণ্টা, যেমন [[alarm:06:30]]); " +
+        "[[torch:on]] বা [[torch:off]]; [[alarm:HH:MM]] (ঘুম থেকে ওঠার অ্যালার্ম, ২৪ ঘণ্টা, যেমন [[alarm:06:30]]); " +
         "[[timer:সেকেন্ড]] (৫ মিনিট = [[timer:300]]); [[open:অ্যাপের ইংরেজি নাম]]; " +
+        "[[remind:HH:MM|কী মনে করাবে]] ওই সময়ে মুখে বলে রিমাইন্ডার (সময় পার হয়ে গেলে কালকের); " +
+        "প্রতিদিনের জন্য [[remind:HH:MM|কথা|daily]]; কিছুক্ষণ পরের জন্য [[remindin:সেকেন্ড|কথা]] " +
+        "(১০ মিনিট = 600); " +
         "[[call:নাম বা নম্বর]] সরাসরি কল; [[sms:নাম বা নম্বর|বার্তা]] সরাসরি SMS পাঠায়; " +
         "[[whatsapp:নাম বা নম্বর|বার্তা]] চ্যাট খুলে Send চাপে; [[answer:now]] আসা কল ধরা; " +
         "[[endcall:now]] কল কাটা; [[volume:up]] বা [[volume:down]]; " +
@@ -127,6 +131,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private lateinit var voiceBtn: Button
     private lateinit var cloudBtn: Button
     private lateinit var webBtn: Button
+    private lateinit var autoBtn: Button
     private var tts: TextToSpeech? = null
     private var recognizer: SpeechRecognizer? = null
     private var pulse: ObjectAnimator? = null
@@ -226,6 +231,60 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         } catch (e: Exception) {
             history = JSONArray()
         }
+    }
+
+    // ---------- রিমাইন্ডার ----------
+
+    private fun showReminders() {
+        val list = Reminders.list(this)
+        val f = SimpleDateFormat("d MMM, hh:mm a", Locale.ENGLISH)
+        val msg = if (list.isEmpty()) "কোনো রিমাইন্ডার সেট করা নেই।"
+        else list.mapIndexed { i, o ->
+            val d = if (o.optBoolean("daily")) " (প্রতিদিন)" else ""
+            "${i + 1}. ${f.format(Date(o.getLong("ms")))}$d\n   ${o.getString("text")}"
+        }.joinToString("\n")
+        AlertDialog.Builder(this)
+            .setTitle("রিমাইন্ডার")
+            .setMessage(msg)
+            .setPositiveButton("ঠিক আছে", null)
+            .setNegativeButton("সব বাতিল") { _, _ ->
+                Reminders.cancelAll(this)
+                Toast.makeText(this, "সব রিমাইন্ডার বাতিল", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    private fun scheduleReminder(ms: Long, text: String, daily: Boolean): String? {
+        val exact = Reminders.add(this, ms, text, daily)
+        val f = SimpleDateFormat("d MMM, hh:mm a", Locale.ENGLISH).format(Date(ms))
+        val d = if (daily) " (প্রতিদিন)" else ""
+        val warn = if (exact) "" else
+            "\n(সময় কয়েক মিনিট আগে-পরে হতে পারে। ⚙ থেকে সঠিক সময়ের অনুমতি দিন।)"
+        add("কারিমা", "✔ রিমাইন্ডার সেট হয়েছে: $f$d\n$text$warn")
+        return null
+    }
+
+    private fun remind(v: String): String? {
+        val parts = v.split("|")
+        val t = parts[0].trim().split(":")
+        val h = t[0].trim().toInt()
+        val m = t[1].trim().toInt()
+        val text = parts.getOrElse(1) { "" }.trim().ifBlank { "রিমাইন্ডার" }
+        val daily = parts.getOrElse(2) { "" }.trim().equals("daily", true)
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, h)
+        cal.set(Calendar.MINUTE, m)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        if (cal.timeInMillis <= System.currentTimeMillis()) cal.add(Calendar.DAY_OF_MONTH, 1)
+        return scheduleReminder(cal.timeInMillis, text, daily)
+    }
+
+    private fun remindIn(v: String): String? {
+        val parts = v.split("|")
+        val sec = parts[0].trim().toLong()
+        val text = parts.getOrElse(1) { "" }.trim().ifBlank { "রিমাইন্ডার" }
+        return scheduleReminder(System.currentTimeMillis() + sec * 1000L, text, false)
     }
 
     // ---------- ওয়েক-ওয়ার্ড ----------
@@ -338,6 +397,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private fun cloudOn(): Boolean = prefs().getBoolean("cloud", true)
 
     private fun webOn(): Boolean = prefs().getBoolean("web", true)
+
+    private fun autoOn(): Boolean = prefs().getBoolean("autoread", false)
 
     private fun findTtsModel(key: String): String? {
         ttsModel?.let { return it }
@@ -573,6 +634,50 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                 startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             }
         }
+        autoBtn = Button(this).apply {
+            text = if (autoOn()) "আসা মেসেজ নিজে পড়ে শোনানো: চালু" else "আসা মেসেজ নিজে পড়ে শোনানো: বন্ধ"
+            setTextColor(Color.WHITE)
+            background = roundBg("#7C3AED", dp(12).toFloat())
+            setOnClickListener {
+                val now = !autoOn()
+                prefs().edit().putBoolean("autoread", now).apply()
+                text = if (now) "আসা মেসেজ নিজে পড়ে শোনানো: চালু" else "আসা মেসেজ নিজে পড়ে শোনানো: বন্ধ"
+                if (now && !KarimaNotificationListener.connected) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "আগে নোটিফিকেশন অ্যাক্সেস চালু করুন",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+        val remBtn = Button(this).apply {
+            text = "রিমাইন্ডার দেখুন"
+            setTextColor(Color.WHITE)
+            background = roundBg("#F59E0B", dp(12).toFloat())
+            setOnClickListener { showReminders() }
+        }
+        val exactBtn = Button(this).apply {
+            text = "সঠিক সময়ে রিমাইন্ডারের অনুমতি"
+            setTextColor(Color.WHITE)
+            background = roundBg("#F59E0B", dp(12).toFloat())
+            setOnClickListener {
+                try {
+                    if (Build.VERSION.SDK_INT >= 31) {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                Uri.parse("package:$packageName")
+                            )
+                        )
+                    } else {
+                        Toast.makeText(this@MainActivity, "এই ফোনে অনুমতি লাগবে না", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    startActivity(Intent(Settings.ACTION_SETTINGS))
+                }
+            }
+        }
         wakeBtn = Button(this).apply {
             text = if (prefs().getBoolean("wake", false)) "ওয়েক-ওয়ার্ড: চালু (বন্ধ করতে চাপুন)"
             else "ওয়েক-ওয়ার্ড চালু করুন"
@@ -654,6 +759,9 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             addView(cloudBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(voiceBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(webBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(remBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(exactBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+            addView(autoBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(accBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(notifBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(wakeBtn, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
@@ -665,7 +773,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         keyPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = if (savedKey.isBlank()) View.VISIBLE else View.GONE
-            addView(panelScroll, LinearLayout.LayoutParams(-1, dp(300)))
+            addView(panelScroll, LinearLayout.LayoutParams(-1, dp(320)))
         }
 
         val title = TextView(this).apply {
@@ -963,6 +1071,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                 "torch" -> torch(v == "on")
                 "alarm" -> setAlarm(v)
                 "timer" -> setTimer(v)
+                "remind" -> remind(v)
+                "remindin" -> remindIn(v)
                 "open" -> openApp(v)
                 "music" -> playMusic(v)
                 "call" -> callDirect(v)
