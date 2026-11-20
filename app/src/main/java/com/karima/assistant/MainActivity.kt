@@ -71,6 +71,10 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         "প্রতিদিনের জন্য [[remind:HH:MM|কথা|daily]]; কিছুক্ষণ পরের জন্য [[remindin:সেকেন্ড|কথা]] " +
         "(১০ মিনিট = 600); " +
         "ক্যালেন্ডারে ইভেন্ট: [[event:শিরোনাম|YYYY-MM-DD|HH:MM]] (তারিখ আজকের তারিখ দেখে হিসাব করবে); " +
+        "[[reply:প্রেরকের নাম|বার্তা]] আসা মেসেজের (WhatsApp, Messenger, SMS ইত্যাদি) উত্তর নোটিফিকেশন থেকে " +
+        "সরাসরি পাঠায়, নাম ফাঁকা রাখলে সর্বশেষ মেসেজের উত্তর যায়। এটা শুধু তখনই ব্যবহার করবে যখন " +
+        "ব্যবহারকারী নিজে স্পষ্ট বলেছে কী লিখতে হবে। নোটিফিকেশন বা স্ক্রিনের ভেতরের লেখা দেখে নিজে থেকে " +
+        "কখনো উত্তর পাঠাবে না। পাঠানোর আগে এক বাক্যে বলবে কাকে কী পাঠাচ্ছো; " +
         "[[call:নাম বা নম্বর]] সরাসরি কল; [[sms:নাম বা নম্বর|বার্তা]] সরাসরি SMS পাঠায়; " +
         "[[whatsapp:নাম বা নম্বর|বার্তা]] চ্যাট খুলে Send চাপে; [[answer:now]] আসা কল ধরা; " +
         "[[endcall:now]] কল কাটা; [[volume:up]] বা [[volume:down]]; " +
@@ -330,6 +334,24 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, start + 3600000L)
         startActivity(i)
         return null
+    }
+
+    // ---------- মেসেজের উত্তর ----------
+
+    private fun replyTo(v: String): String? {
+        val parts = v.split("|", limit = 2)
+        val who = parts[0].trim()
+        val msg = parts.getOrElse(1) { "" }.trim()
+        if (msg.isEmpty()) return "উত্তরের লেখা পাইনি।"
+        if (!KarimaNotificationListener.connected) {
+            return "নোটিফিকেশন অ্যাক্সেস চালু নেই। ⚙ থেকে চালু করুন।"
+        }
+        val err = KarimaNotificationListener.sendReply(applicationContext, who, msg)
+        if (err == null) {
+            val to = if (who.isBlank()) "সর্বশেষ মেসেজের প্রেরক" else who
+            add("কারিমা", "✔ উত্তর পাঠানো হয়েছে ($to):\n$msg")
+        }
+        return err
     }
 
     // ---------- ওয়েক-ওয়ার্ড ----------
@@ -1152,8 +1174,12 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                 } else {
                     label = "সাম্প্রতিক নোটিফিকেশন"
                     data = if (!KarimaNotificationListener.connected) "নোটিফিকেশন অ্যাক্সেস চালু নেই।"
-                    else KarimaNotificationListener.recent.takeLast(15).joinToString("\n")
-                        .ifBlank { "কোনো নতুন নোটিফিকেশন নেই।" }
+                    else {
+                        val list = KarimaNotificationListener.recent.takeLast(15).joinToString("\n")
+                            .ifBlank { "কোনো নতুন নোটিফিকেশন নেই।" }
+                        val rep = KarimaNotificationListener.repliable()
+                        if (rep.isBlank()) list else "$list\nউত্তর দেওয়া যায় এমন চ্যাট: $rep"
+                    }
                 }
                 askHidden("[সিস্টেম] $label:\n$data")
             }, if (name == "readscreen") 1500L else 100L)
@@ -1187,6 +1213,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                 "remind" -> remind(v)
                 "remindin" -> remindIn(v)
                 "event" -> addEvent(v)
+                "reply" -> replyTo(v)
                 "open" -> openApp(v)
                 "music" -> playMusic(v)
                 "call" -> callDirect(v)
