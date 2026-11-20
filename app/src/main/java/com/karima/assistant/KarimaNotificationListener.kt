@@ -1,7 +1,11 @@
 package com.karima.assistant
 
 import android.app.Notification
+import android.app.PendingIntent
+import android.app.RemoteInput
 import android.content.Context
+import android.content.Intent
+import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.speech.tts.TextToSpeech
@@ -13,6 +17,45 @@ class KarimaNotificationListener : NotificationListenerService(), TextToSpeech.O
     companion object {
         val recent = CopyOnWriteArrayList<String>()
         var connected = false
+
+        private val targets = LinkedHashMap<String, Notification.Action>()
+        private val lock = Any()
+
+        fun repliable(): String = synchronized(lock) {
+            targets.keys.toList().takeLast(8).joinToString(", ")
+        }
+
+        fun sendReply(ctx: Context, who: String, text: String): String? {
+            val action: Notification.Action? = synchronized(lock) {
+                if (targets.isEmpty()) {
+                    null
+                } else if (who.isBlank()) {
+                    targets.values.last()
+                } else {
+                    val q = who.trim().lowercase()
+                    targets.entries.lastOrNull { it.key.contains(q) || q.contains(it.key) }?.value
+                }
+            }
+            if (action == null) {
+                return "\"$who\" নামে উত্তর দেওয়ার মতো কোনো মেসেজ নোটিফিকেশন পাইনি।"
+            }
+            val inputs = action.remoteInputs
+            if (inputs == null || inputs.isEmpty()) {
+                return "এই নোটিফিকেশনে সরাসরি উত্তর দেওয়া যায় না।"
+            }
+            return try {
+                val intent = Intent()
+                val b = Bundle()
+                for (ri in inputs) b.putCharSequence(ri.resultKey, text)
+                RemoteInput.addResultsToIntent(inputs, intent, b)
+                action.actionIntent.send(ctx, 0, intent)
+                null
+            } catch (e: PendingIntent.CanceledException) {
+                "মেসেজটি আর নেই (নোটিফিকেশন সরে গেছে)। নতুন মেসেজ আসার পর আবার চেষ্টা করুন।"
+            } catch (e: Exception) {
+                "উত্তর পাঠানো যায়নি: ${e.message}"
+            }
+        }
     }
 
     private var tts: TextToSpeech? = null
@@ -65,6 +108,20 @@ class KarimaNotificationListener : NotificationListenerService(), TextToSpeech.O
         }
         recent.add("$app: $title - $text".take(200))
         while (recent.size > 30) recent.removeAt(0)
+
+        if (title.isNotBlank()) {
+            val act = n.actions?.firstOrNull { a ->
+                a.remoteInputs?.any { it.allowFreeFormInput } == true
+            }
+            if (act != null) {
+                synchronized(lock) {
+                    val k = title.lowercase()
+                    targets.remove(k)
+                    targets[k] = act
+                    while (targets.size > 12) targets.remove(targets.keys.first())
+                }
+            }
+        }
 
         val on = getSharedPreferences("k", Context.MODE_PRIVATE).getBoolean("autoread", false)
         if (!on || !ready || AppState.visible) return
