@@ -7,6 +7,8 @@ import android.animation.PropertyValuesHolder
 import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -27,7 +29,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.AlarmClock
+import android.provider.CalendarContract
 import android.provider.ContactsContract
+import android.provider.MediaStore
 import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -66,6 +70,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         "[[remind:HH:MM|কী মনে করাবে]] ওই সময়ে মুখে বলে রিমাইন্ডার (সময় পার হয়ে গেলে কালকের); " +
         "প্রতিদিনের জন্য [[remind:HH:MM|কথা|daily]]; কিছুক্ষণ পরের জন্য [[remindin:সেকেন্ড|কথা]] " +
         "(১০ মিনিট = 600); " +
+        "ক্যালেন্ডারে ইভেন্ট: [[event:শিরোনাম|YYYY-MM-DD|HH:MM]] (তারিখ আজকের তারিখ দেখে হিসাব করবে); " +
         "[[call:নাম বা নম্বর]] সরাসরি কল; [[sms:নাম বা নম্বর|বার্তা]] সরাসরি SMS পাঠায়; " +
         "[[whatsapp:নাম বা নম্বর|বার্তা]] চ্যাট খুলে Send চাপে; [[answer:now]] আসা কল ধরা; " +
         "[[endcall:now]] কল কাটা; [[volume:up]] বা [[volume:down]]; " +
@@ -127,6 +132,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private lateinit var keyInput: EditText
     private lateinit var msgInput: EditText
     private lateinit var langChip: TextView
+    private lateinit var convoChip: TextView
     private lateinit var wakeBtn: Button
     private lateinit var voiceBtn: Button
     private lateinit var cloudBtn: Button
@@ -140,6 +146,13 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private var voiceLang = "bn-BD"
     private val ui = Handler(Looper.getMainLooper())
     private var agentDepth = 0
+
+    private var convo = false
+    private var convoFails = 0
+    private var camUri: Uri? = null
+    private val stopWords = setOf(
+        "থামো", "থামুন", "থাম", "স্টপ", "stop", "বিদায়", "bye", "goodbye", "কথোপকথন বন্ধ"
+    )
 
     private var gen = 0
     private val speakList = mutableListOf<Pair<String, Boolean>>()
@@ -162,6 +175,20 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             shape = GradientDrawable.OVAL
             setColor(Color.parseColor(color))
         }
+
+    // ---------- কথোপকথন মোড ----------
+
+    private fun setConvo(on: Boolean) {
+        convo = on
+        convoFails = 0
+        convoChip.text = if (on) "💬 কথোপকথন: চালু (থামাতে \"থামো\" বলুন)" else "💬 কথোপকথন: বন্ধ"
+        convoChip.setTextColor(Color.parseColor(if (on) "#22C55E" else "#94A3B8"))
+    }
+
+    private fun afterSpeech() {
+        if (!convo || !AppState.visible) return
+        ui.postDelayed({ if (convo && AppState.visible) listen() }, 500L)
+    }
 
     // ---------- মেমোরি ----------
 
@@ -287,6 +314,24 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         return scheduleReminder(System.currentTimeMillis() + sec * 1000L, text, false)
     }
 
+    // ---------- ক্যালেন্ডার ----------
+
+    private fun addEvent(v: String): String? {
+        val p = v.split("|")
+        val title = p[0].trim().ifBlank { "ইভেন্ট" }
+        val date = p.getOrElse(1) { "" }.trim()
+        val time = p.getOrElse(2) { "09:00" }.trim().ifBlank { "09:00" }
+        val f = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ENGLISH)
+        val start = f.parse("$date $time")?.time ?: return "তারিখ বুঝতে পারিনি।"
+        val i = Intent(Intent.ACTION_INSERT)
+            .setData(CalendarContract.Events.CONTENT_URI)
+            .putExtra(CalendarContract.Events.TITLE, title)
+            .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, start)
+            .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, start + 3600000L)
+        startActivity(i)
+        return null
+    }
+
     // ---------- ওয়েক-ওয়ার্ড ----------
 
     private fun startWake() {
@@ -337,11 +382,42 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     // ---------- ছবি ----------
 
     private fun pickImage() {
+        AlertDialog.Builder(this)
+            .setTitle("ছবি")
+            .setItems(arrayOf("📸 ক্যামেরা দিয়ে তুলুন", "🖼 গ্যালারি থেকে বাছুন")) { _, which ->
+                if (which == 0) takePhoto() else pickGallery()
+            }
+            .show()
+    }
+
+    private fun pickGallery() {
         try {
             val i = Intent(Intent.ACTION_GET_CONTENT).setType("image/*")
             startActivityForResult(Intent.createChooser(i, "ছবি বাছুন"), 77)
         } catch (e: Exception) {
             add("সিস্টেম", "ছবি বাছাই খোলা যায়নি: ${e.message}")
+        }
+    }
+
+    private fun takePhoto() {
+        try {
+            val cv = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "karima_${System.currentTimeMillis()}.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            }
+            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv)
+            if (uri == null) {
+                add("সিস্টেম", "ক্যামেরার জন্য ফাইল বানানো যায়নি, গ্যালারি থেকে বাছুন।")
+                return
+            }
+            camUri = uri
+            val i = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                .putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            i.clipData = ClipData.newUri(contentResolver, "photo", uri)
+            startActivityForResult(i, 78)
+        } catch (e: Exception) {
+            add("সিস্টেম", "ক্যামেরা খোলা যায়নি: ${e.message}")
         }
     }
 
@@ -363,28 +439,43 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun handleImageUri(uri: Uri) {
+        status.text = "ছবি দেখছি..."
+        thread {
+            val b64 = encodeImage(uri)
+            runOnUiThread {
+                if (b64 == null) {
+                    idle()
+                    add("সিস্টেম", "ছবিটি পড়া যায়নি।")
+                } else {
+                    val typed = msgInput.text.toString().trim()
+                    val q = if (typed.isEmpty())
+                        "এই ছবিতে কী আছে? সংক্ষেপে বলো। ছবিতে লেখা থাকলে পড়ে শোনাও।"
+                    else typed
+                    msgInput.setText("")
+                    stopSpeaking()
+                    add("আপনি", "📷 $q")
+                    agentDepth = 0
+                    ask("[ছবি] $q", b64)
+                }
+            }
+        }
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 77 && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
-            status.text = "ছবি দেখছি..."
-            thread {
-                val b64 = encodeImage(uri)
-                runOnUiThread {
-                    if (b64 == null) {
-                        idle()
-                        add("সিস্টেম", "ছবিটি পড়া যায়নি।")
-                    } else {
-                        val typed = msgInput.text.toString().trim()
-                        val q = if (typed.isEmpty())
-                            "এই ছবিতে কী আছে? সংক্ষেপে বলো। ছবিতে লেখা থাকলে পড়ে শোনাও।"
-                        else typed
-                        msgInput.setText("")
-                        stopSpeaking()
-                        add("আপনি", "📷 $q")
-                        agentDepth = 0
-                        ask("[ছবি] $q", b64)
-                    }
+            handleImageUri(uri)
+        } else if (requestCode == 78) {
+            val u = camUri
+            camUri = null
+            if (resultCode == RESULT_OK && u != null) {
+                handleImageUri(u)
+            } else if (u != null) {
+                try {
+                    contentResolver.delete(u, null, null)
+                } catch (e: Exception) {
                 }
             }
         }
@@ -491,6 +582,9 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             t.write(pcm, 0, pcm.size)
             t.play()
             track = t
+            val g = gen
+            val ms = pcm.size / 2L * 1000L / rate
+            ui.postDelayed({ if (g == gen) afterSpeech() }, ms + 700L)
         } catch (e: Exception) {
             add("সিস্টেম", "ভয়েস বাজানো যায়নি: ${e.message}")
         }
@@ -558,7 +652,10 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     }
 
     private fun speakNext() {
-        if (speakList.isEmpty()) return
+        if (speakList.isEmpty()) {
+            afterSpeech()
+            return
+        }
         val seg = speakList.removeAt(0)
         val en = seg.second
         val r = tts?.setLanguage(if (en) Locale.US else Locale("bn", "BD"))
@@ -842,6 +939,18 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#94A3B8"))
         }
+        convoChip = TextView(this).apply {
+            text = "💬 কথোপকথন: বন্ধ"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            background = roundBg("#1E293B", dp(20).toFloat())
+            setOnClickListener {
+                setConvo(!convo)
+                if (convo) listen()
+            }
+        }
 
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll = ScrollView(this).apply { addView(chat) }
@@ -910,6 +1019,10 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             bottomMargin = dp(6)
         })
         root.addView(status, LinearLayout.LayoutParams(-1, -2))
+        root.addView(convoChip, LinearLayout.LayoutParams(-2, -2).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(6)
+        })
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f).apply {
             topMargin = dp(8)
             bottomMargin = dp(8)
@@ -1073,6 +1186,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                 "timer" -> setTimer(v)
                 "remind" -> remind(v)
                 "remindin" -> remindIn(v)
+                "event" -> addEvent(v)
                 "open" -> openApp(v)
                 "music" -> playMusic(v)
                 "call" -> callDirect(v)
@@ -1317,7 +1431,17 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             override fun onEvent(t: Int, p: Bundle?) {}
             override fun onError(e: Int) {
                 idle()
-                add("সিস্টেম", "শুনতে পাইনি (কোড $e), আবার চেষ্টা করুন।")
+                if (convo) {
+                    convoFails++
+                    if (convoFails >= 2) {
+                        setConvo(false)
+                        add("সিস্টেম", "কিছু শুনতে না পেয়ে কথোপকথন বন্ধ করলাম।")
+                    } else {
+                        ui.postDelayed({ if (convo && AppState.visible) listen() }, 500L)
+                    }
+                } else {
+                    add("সিস্টেম", "শুনতে পাইনি (কোড $e), আবার চেষ্টা করুন।")
+                }
             }
             override fun onResults(r: Bundle?) {
                 val said = r?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
@@ -1325,7 +1449,14 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                     idle()
                     return
                 }
+                convoFails = 0
                 add("আপনি", said)
+                if (convo && said.trim().lowercase() in stopWords) {
+                    idle()
+                    setConvo(false)
+                    speakMixed("ঠিক আছে।")
+                    return
+                }
                 agentDepth = 0
                 ask(said)
             }
