@@ -26,4 +26,4 @@
 
 4. **📲 সরাসরি GitHub APK ডাউনলোড:**
    - কোনো ব্রাউজার প্রয়োজন নেই — সম্পূর্ণ নেটিভ অ্যান্ড্রয়েড অ্যাপ।
-   - [Actions](https://github.com/sensei5266/Karima-Ai/actions)-এর সর্বশেষ সবুজ **Build APK** রানের ভেতর `karima-apk` আর্টিফ্যাক্ট থেকে সরাসরি APK ডাউনলোড করুন।
+   - [Releases (v3.0-trinity)](https://github.com/sensei5266/Karima-Ai/releases/tag/v3.0-trinity) থেকে সরাসরি `Karima-AI-Trinity.apk` ডাউনলোড করুন, অথবা [Actions](https://github.com/sensei5266/Karima-Ai/actions)-এর **Build APK** রান থেকে `karima-apk` আর্টিফ্যাক্ট নিন।
