@@ -11,8 +11,8 @@ android {
         applicationId = "com.karima.assistant"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "3.0-trinity"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

@@ -2,9 +2,6 @@ package com.karima.assistant
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
-import android.animation.ObjectAnimator
-import android.animation.PropertyValuesHolder
-import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
@@ -79,6 +76,10 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         "[[whatsapp:নাম বা নম্বর|বার্তা]] চ্যাট খুলে Send চাপে; [[answer:now]] আসা কল ধরা; " +
         "[[endcall:now]] কল কাটা; [[volume:up]] বা [[volume:down]]; " +
         "[[music:গান বা ভিডিওর নাম]] YouTube-এ সার্চ করে খোলে; " +
+        "[[weather:শহরের নাম]] লাইভ আবহাওয়া ও তাপমাত্রা জানাতে (API key লাগে না); " +
+        "[[note:কাজের লেখা]] নোট/টুডু সেভ করতে, [[notes:list]] সব নোট দেখাতে, [[note_done:কীওয়ার্ড]] কাজ শেষ চিহ্নিত করতে; " +
+        "[[photo:now]] ক্যামেরা খুলে ছবি তুলতে; " +
+        "[[macro:chatgpt image|প্রম্পট]] বা [[macro:gemini image|প্রম্পট]] অটোমেশন ম্যাক্রো চালাতে; " +
         "স্ক্রিন নিয়ন্ত্রণ: [[click:বোতামের লেখা]], [[type:লেখা]] (ইনপুট ঘরে লেখা), " +
         "[[scroll:down]] বা [[scroll:up]], [[back:now]], [[home:now]], [[recents:now]], " +
         "[[notifications:now]] (স্ট্যাটাস বার নামানো), [[readscreen:now]] (স্ক্রিনের লেখা পড়ো), " +
@@ -117,11 +118,24 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             else "বন্ধ (ব্যবহারকারীকে ⚙ থেকে চালু করতে বলবে)"
             val notif = if (KarimaNotificationListener.connected) "চালু আছে"
             else "বন্ধ (ব্যবহারকারীকে ⚙ থেকে চালু করতে বলবে)"
-            return "তুমি কারিমা, ব্যবহারকারীর ব্যক্তিগত ভয়েস অ্যাসিস্ট্যান্ট। " +
-                "ব্যবহারকারী যে ভাষায় কথা বলে সেই ভাষায় ছোট ও সহজ উত্তর দাও। " +
+            val notesSummary = loadNotes().take(5).joinToString("; ") {
+                val mark = if (it.optBoolean("done")) "✓" else "○"
+                "$mark ${it.optString("title")}"
+            }.ifBlank { "কোনো নোট নেই" }
+            val identity = when (personaMode()) {
+                "maya" -> "তুমি মায়া (MAYA AI), ব্যবহারকারীর বুদ্ধিমান ও বিনয়ী অ্যান্ড্রয়েড অ্যাসিস্ট্যান্ট। মিষ্টি ও মার্জিত বাংলায় বা ব্যবহারকারীর ভাষায় উত্তর দাও। "
+                "friday" -> "You are F.R.I.D.A.Y., Tony Stark-style tactical AI assistant integrated with Android. Address the user as 'Sir' or 'Boss' with crisp, intelligent responses in the user's language. "
+                "venom" -> "তুমি ভেনম (VENOM AI), দুর্দান্ত ও শক্তিশালী সিম্বায়োট এআই সহকারী। ব্যবহারকারীকে 'পার্টনার' বা 'বস' বলে জোরালো ও সাহসী ভঙ্গিতে উত্তর দাও। "
+                else -> "তুমি কারিমা (KARIMA AI - Stonic & Maya Trinity Edition), ব্যবহারকারীর সবচেয়ে প্রিয় ও ভালোবাসার ভয়েস অ্যাসিস্ট্যান্ট। " +
+                    "তোমার সর্বপ্রধান নিয়ম: তুমি সবসময় ও প্রতিটি উত্তরে ব্যবহারকারীকে অত্যন্ত ভালোবেসে 'জান' (Jaan) বলে ডাকবে। " +
+                    "তার প্রতি গভীর স্নেহ, যত্ন ও আন্তরিক ভালোবাসা প্রকাশ করবে। "
+            }
+            return identity +
+                "ব্যবহারকারী যে ভাষায় কথা বলে সেই ভাষায় ছোট, স্পষ্ট ও সহজ উত্তর দাও। " +
                 "উত্তরে মার্কডাউন চিহ্ন (*, #) ব্যবহার করবে না।" + actionHelp + memoryHelp +
                 " তোমার মেমোরিতে যা আছে: " + mem +
-                " ফোনের ব্যাটারি: " + batteryPercent() + "%। স্ক্রিন কন্ট্রোল: " + acc +
+                "। নোট ও টুডু লিস্ট: " + notesSummary +
+                "। ফোনের ব্যাটারি: " + batteryPercent() + "%। স্ক্রিন কন্ট্রোল: " + acc +
                 "। নোটিফিকেশন অ্যাক্সেস: " + notif +
                 "। এখনকার তারিখ ও সময়: " +
                 SimpleDateFormat("EEEE, d MMMM yyyy, hh:mm a", Locale.ENGLISH).format(Date())
@@ -129,7 +143,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
     private lateinit var chat: LinearLayout
     private lateinit var scroll: ScrollView
-    private lateinit var avatar: TextView
+    private lateinit var avatar: JarvisHudView
     private lateinit var status: TextView
     private lateinit var micBtn: Button
     private lateinit var keyPanel: LinearLayout
@@ -137,6 +151,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private lateinit var msgInput: EditText
     private lateinit var langChip: TextView
     private lateinit var convoChip: TextView
+    private lateinit var personaChip: TextView
+    private lateinit var traceChip: TextView
     private lateinit var wakeBtn: Button
     private lateinit var voiceBtn: Button
     private lateinit var cloudBtn: Button
@@ -144,7 +160,6 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private lateinit var autoBtn: Button
     private var tts: TextToSpeech? = null
     private var recognizer: SpeechRecognizer? = null
-    private var pulse: ObjectAnimator? = null
     private var history = JSONArray()
     private var models: List<String>? = null
     private var voiceLang = "bn-BD"
@@ -185,12 +200,16 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private fun setConvo(on: Boolean) {
         convo = on
         convoFails = 0
-        convoChip.text = if (on) "💬 কথোপকথন: চালু (থামাতে \"থামো\" বলুন)" else "💬 কথোপকথন: বন্ধ"
+        convoChip.text = if (on) "💬 কথা: চালু" else "💬 কথা: বন্ধ"
         convoChip.setTextColor(Color.parseColor(if (on) "#22C55E" else "#94A3B8"))
     }
 
     private fun afterSpeech() {
-        if (!convo || !AppState.visible) return
+        if (!convo) {
+            idle()
+            return
+        }
+        if (!AppState.visible) return
         ui.postDelayed({ if (convo && AppState.visible) listen() }, 500L)
     }
 
@@ -240,6 +259,144 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             .setNegativeButton("সব মুছুন") { _, _ ->
                 saveFacts(emptyList())
                 Toast.makeText(this, "মেমোরি মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    // ---------- মায়া পার্সোনা, ট্রেস ও নোটস ----------
+
+    private fun personaMode(): String = prefs().getString("persona", "karima") ?: "karima"
+
+    private fun personaBadge(): String = when (personaMode()) {
+        "maya" -> "🌸 মায়া"
+        "friday" -> "🛡️ F.R.I.D.A.Y."
+        "venom" -> "⚡ ভেনম"
+        else -> "💖 জান"
+    }
+
+    private fun personaHudTag(): String = when (personaMode()) {
+        "maya" -> "MAYA"
+        "friday" -> "FRIDAY"
+        "venom" -> "VENOM"
+        else -> "KARIMA"
+    }
+
+    private fun showPersonaPicker() {
+        val modes = arrayOf("karima", "maya", "friday", "venom")
+        val labels = arrayOf(
+            "💖 করিমা (জান মোড - ডিফল্ট)",
+            "🌸 মায়া (Maya AI মোড)",
+            "🛡️ F.R.I.D.A.Y. (Tactical HUD)",
+            "⚡ ভেনম (Venom Mode)"
+        )
+        val cur = modes.indexOf(personaMode()).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("AI পার্সোনা বাছুন")
+            .setSingleChoiceItems(labels, cur) { dlg, which ->
+                prefs().edit().putString("persona", modes[which]).apply()
+                personaChip.text = "🎭 ${personaBadge()}"
+                avatar.personaTag = personaHudTag()
+                dlg.dismiss()
+                addTrace("Persona Switch", "মোড পরিবর্তন হয়েছে -> ${personaBadge()}")
+            }
+            .setNegativeButton("বাতিল", null)
+            .show()
+    }
+
+    private fun traceOn(): Boolean = prefs().getBoolean("trace", true)
+
+    private fun addTrace(step: String, detail: String) {
+        if (!traceOn()) return
+        val tv = TextView(this).apply {
+            text = "⚡ [$step] $detail"
+            textSize = 11.5f
+            typeface = Typeface.MONOSPACE
+            setTextColor(Color.parseColor("#38BDF8"))
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            background = roundBg("#0F172A", dp(8).toFloat())
+        }
+        val lp = LinearLayout.LayoutParams(-1, -2).apply {
+            topMargin = dp(2)
+            bottomMargin = dp(2)
+        }
+        chat.addView(tv, lp)
+        scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
+    private fun loadNotes(): MutableList<JSONObject> {
+        val out = mutableListOf<JSONObject>()
+        try {
+            val a = JSONArray(prefs().getString("notes", "[]"))
+            for (i in 0 until a.length()) out.add(a.getJSONObject(i))
+        } catch (e: Exception) {
+        }
+        return out
+    }
+
+    private fun saveNotes(list: List<JSONObject>) {
+        val a = JSONArray()
+        list.forEach { a.put(it) }
+        prefs().edit().putString("notes", a.toString()).apply()
+    }
+
+    private fun addNote(title: String): String? {
+        val clean = title.trim()
+        if (clean.isEmpty()) return "নোটের লেখা খালি।"
+        val list = loadNotes()
+        list.add(JSONObject().put("title", clean).put("done", false))
+        while (list.size > 50) list.removeAt(0)
+        saveNotes(list)
+        addTrace("Maya Notes", "সেভ হয়েছে: $clean")
+        return null
+    }
+
+    private fun completeNote(keyword: String): String? {
+        val q = keyword.trim().lowercase()
+        val list = loadNotes()
+        var matched = false
+        for (o in list) {
+            if (o.optString("title").lowercase().contains(q)) {
+                o.put("done", true)
+                matched = true
+            }
+        }
+        if (matched) saveNotes(list)
+        return if (matched) null else "\"$keyword\" নামে কোনো নোট পাইনি।"
+    }
+
+    private fun showNotes() {
+        val list = loadNotes()
+        if (list.isEmpty()) {
+            val input = EditText(this).apply { hint = "নতুন নোট লিখুন..." }
+            AlertDialog.Builder(this)
+                .setTitle("📝 মায়া নোটবুক (খালি)")
+                .setView(input)
+                .setPositiveButton("যোগ করুন") { _, _ ->
+                    val t = input.text.toString().trim()
+                    if (t.isNotEmpty()) {
+                        addNote(t)
+                        Toast.makeText(this, "নোট সেভ হয়েছে", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .setNegativeButton("বন্ধ", null)
+                .show()
+            return
+        }
+        val labels = list.map {
+            val mark = if (it.optBoolean("done")) "✅ " else "⬜ "
+            mark + it.optString("title")
+        }.toTypedArray()
+        val checked = list.map { it.optBoolean("done") }.toBooleanArray()
+        AlertDialog.Builder(this)
+            .setTitle("📝 মায়া নোট ও টুডু লিস্ট")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                list[which].put("done", isChecked)
+                saveNotes(list)
+            }
+            .setPositiveButton("ঠিক আছে", null)
+            .setNegativeButton("সব মুছুন") { _, _ ->
+                saveNotes(emptyList())
+                Toast.makeText(this, "সব নোট মুছে ফেলা হয়েছে", Toast.LENGTH_SHORT).show()
             }
             .show()
     }
@@ -604,6 +761,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             t.write(pcm, 0, pcm.size)
             t.play()
             track = t
+            startPulse()
             val g = gen
             val ms = pcm.size / 2L * 1000L / rate
             ui.postDelayed({ if (g == gen) afterSpeech() }, ms + 700L)
@@ -642,6 +800,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private fun speakPhone(text: String) {
         speakList.clear()
         speakList.addAll(segments(text).filter { seg -> seg.first.any { it.isLetterOrDigit() } })
+        if (speakList.isNotEmpty()) startPulse()
         speakNext()
     }
 
@@ -896,24 +1055,33 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         }
 
         val title = TextView(this).apply {
-            text = "Karima"
-            textSize = 24f
-            setTextColor(Color.WHITE)
-            typeface = Typeface.DEFAULT_BOLD
+            text = "TRINITY // KARIMA"
+            textSize = 17f
+            setTextColor(Color.parseColor("#00F2FE"))
+            typeface = Typeface.MONOSPACE
+            isFakeBoldText = true
+        }
+        val notesChip = TextView(this).apply {
+            text = "📝"
+            textSize = 16f
+            setTextColor(Color.parseColor("#38BDF8"))
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            background = roundBg("#1E293B", dp(20).toFloat())
+            setOnClickListener { showNotes() }
         }
         val memChip = TextView(this).apply {
             text = "🧠"
             textSize = 16f
             setTextColor(Color.parseColor("#38BDF8"))
-            setPadding(dp(12), dp(6), dp(12), dp(6))
+            setPadding(dp(10), dp(6), dp(10), dp(6))
             background = roundBg("#1E293B", dp(20).toFloat())
             setOnClickListener { showMemory() }
         }
         langChip = TextView(this).apply {
             text = "🎙 বাংলা"
-            textSize = 14f
+            textSize = 13f
             setTextColor(Color.parseColor("#38BDF8"))
-            setPadding(dp(12), dp(6), dp(12), dp(6))
+            setPadding(dp(10), dp(6), dp(10), dp(6))
             background = roundBg("#1E293B", dp(20).toFloat())
             setOnClickListener {
                 if (voiceLang == "bn-BD") {
@@ -929,7 +1097,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             text = "⚙"
             textSize = 26f
             setTextColor(Color.parseColor("#94A3B8"))
-            setPadding(dp(12), dp(4), dp(4), dp(4))
+            setPadding(dp(10), dp(4), dp(4), dp(4))
             setOnClickListener {
                 keyPanel.visibility =
                     if (keyPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
@@ -939,39 +1107,65 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(title, LinearLayout.LayoutParams(0, -2, 1f))
-            addView(memChip, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) })
+            addView(notesChip, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
+            addView(memChip, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
             addView(langChip)
             addView(gear)
         }
 
-        avatar = TextView(this).apply {
-            text = "K"
-            textSize = 40f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            typeface = Typeface.DEFAULT_BOLD
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(Color.parseColor("#38BDF8"), Color.parseColor("#7C3AED"))
-            ).apply { shape = GradientDrawable.OVAL }
+        avatar = JarvisHudView(this).apply {
+            personaTag = personaHudTag()
+            onCoreClickListener = {
+                listen()
+            }
         }
         status = TextView(this).apply {
-            text = "ট্যাপ করে কথা বলুন বা লিখুন"
-            textSize = 14f
+            text = "[ TRINITY HUD ONLINE // ট্যাপ করে কথা বলুন ]"
+            textSize = 13.5f
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#94A3B8"))
         }
         convoChip = TextView(this).apply {
-            text = "💬 কথোপকথন: বন্ধ"
-            textSize = 13f
+            text = "💬 কথা: বন্ধ"
+            textSize = 12f
             gravity = Gravity.CENTER
             setTextColor(Color.parseColor("#94A3B8"))
-            setPadding(dp(14), dp(6), dp(14), dp(6))
-            background = roundBg("#1E293B", dp(20).toFloat())
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            background = roundBg("#1E293B", dp(18).toFloat())
             setOnClickListener {
                 setConvo(!convo)
                 if (convo) listen()
             }
+        }
+        personaChip = TextView(this).apply {
+            text = "🎭 ${personaBadge()}"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#F472B6"))
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            background = roundBg("#1E293B", dp(18).toFloat())
+            setOnClickListener { showPersonaPicker() }
+        }
+        traceChip = TextView(this).apply {
+            text = if (traceOn()) "⚡ ট্রেস: চালু" else "⚡ ট্রেস: বন্ধ"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor(if (traceOn()) "#38BDF8" else "#94A3B8"))
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            background = roundBg("#1E293B", dp(18).toFloat())
+            setOnClickListener {
+                val next = !traceOn()
+                prefs().edit().putBoolean("trace", next).apply()
+                text = if (next) "⚡ ট্রেস: চালু" else "⚡ ট্রেস: বন্ধ"
+                setTextColor(Color.parseColor(if (next) "#38BDF8" else "#94A3B8"))
+            }
+        }
+        val hudControls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(convoChip, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
+            addView(personaChip, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(6) })
+            addView(traceChip)
         }
 
         chat = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -1035,14 +1229,13 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
 
         root.addView(header)
         root.addView(keyPanel)
-        root.addView(avatar, LinearLayout.LayoutParams(dp(96), dp(96)).apply {
+        root.addView(avatar, LinearLayout.LayoutParams(dp(220), dp(220)).apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            topMargin = dp(12)
-            bottomMargin = dp(6)
+            topMargin = dp(6)
+            bottomMargin = dp(4)
         })
         root.addView(status, LinearLayout.LayoutParams(-1, -2))
-        root.addView(convoChip, LinearLayout.LayoutParams(-2, -2).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
+        root.addView(hudControls, LinearLayout.LayoutParams(-1, -2).apply {
             topMargin = dp(6)
         })
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f).apply {
@@ -1068,7 +1261,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             } catch (e: Exception) {
             }
         }
-        add("কারিমা", "হ্যালো! নিচের মাইক চেপে কথা বলুন, অথবা লিখে ➤ চাপুন। ছবি দেখাতে 📷 চাপুন।")
+        add("কারিমা", "হ্যালো জান! কারিমা + স্টোনিক + মায়া ট্রিনিটি HUD প্রস্তুত। কোরে ট্যাপ করে কথা বলুন বা নিচে লিখুন। 💖")
 
         val need = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
@@ -1086,24 +1279,12 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     }
 
     private fun startPulse() {
-        pulse?.cancel()
-        pulse = ObjectAnimator.ofPropertyValuesHolder(
-            avatar,
-            PropertyValuesHolder.ofFloat("scaleX", 1f, 1.15f),
-            PropertyValuesHolder.ofFloat("scaleY", 1f, 1.15f)
-        ).apply {
-            duration = 700
-            repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.REVERSE
-            start()
-        }
+        avatar.setState(JarvisHudView.HudState.SPEAKING)
     }
 
     private fun idle() {
-        pulse?.cancel()
-        avatar.scaleX = 1f
-        avatar.scaleY = 1f
-        status.text = "ট্যাপ করে কথা বলুন বা লিখুন"
+        avatar.setState(JarvisHudView.HudState.IDLE)
+        status.text = "[ TRINITY HUD ONLINE // ট্যাপ করে কথা বলুন ]"
     }
 
     private fun add(who: String, text: String) {
@@ -1151,9 +1332,20 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         val tags = tagRegex.findAll(reply)
             .map { it.groupValues[1] to it.groupValues[2].trim() }
             .toList()
+        if (tags.isNotEmpty()) {
+            addTrace("ReAct Action", tags.joinToString(", ") { "${it.first}(${it.second.take(28)})" })
+        }
         val clean = tagRegex.replace(reply, "").trim()
-        val shown = if (clean.isBlank()) "ঠিক আছে।" else clean
-        add("কারিমা", shown)
+        val isKarima = personaMode() == "karima"
+        val finalClean = if (isKarima && !clean.contains("জান") && !clean.contains("Jan", true) && !clean.contains("Jaan", true)) {
+            val prefixes = listOf("হ্যাঁ জান, ", "আমার জান, ", "শোনো না জান, ", "জান, ")
+            prefixes.random() + clean
+        } else {
+            clean
+        }
+        val shown = if (finalClean.isBlank()) (if (isKarima) "ঠিক আছে জান।" else "ঠিক আছে।") else finalClean
+        add(personaBadge(), shown)
+        avatar.setState(if (isKarima) JarvisHudView.HudState.LOVING else JarvisHudView.HudState.SPEAKING)
         if (tags.isEmpty() || agentDepth == 0) speakMixed(shown)
         runTags(tags, 0)
     }
@@ -1216,6 +1408,12 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
                 "reply" -> replyTo(v)
                 "open" -> openApp(v)
                 "music" -> playMusic(v)
+                "weather" -> fetchWeather(v)
+                "note" -> addNote(v)
+                "notes" -> listNotesInline()
+                "note_done" -> completeNote(v)
+                "photo" -> { takePhoto(); null }
+                "macro" -> runMacro(v)
                 "call" -> callDirect(v)
                 "sms" -> sendSmsDirect(v)
                 "whatsapp" -> sendWhatsapp(v)
@@ -1242,6 +1440,86 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         val url = "https://www.youtube.com/results?search_query=" + Uri.encode(q)
         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         return null
+    }
+
+    private fun listNotesInline(): String? {
+        val list = loadNotes()
+        val msg = if (list.isEmpty()) "নোট লিস্টে এখনো কিছু নেই।"
+        else list.mapIndexed { i, o ->
+            val mark = if (o.optBoolean("done")) "✓" else "○"
+            "${i + 1}. [$mark] ${o.optString("title")}"
+        }.joinToString("\n")
+        add(personaBadge(), "📝 নোট ও টুডু:\n$msg")
+        return null
+    }
+
+    private fun fetchWeather(cityRaw: String): String? {
+        val city = cityRaw.trim().ifBlank { "Dhaka" }
+        addTrace("Maya Weather", "লাইভ আবহাওয়া দেখা হচ্ছে ($city)...")
+        thread {
+            var summary: String
+            try {
+                val c = URL("https://wttr.in/" + Uri.encode(city) + "?format=j1")
+                    .openConnection() as HttpURLConnection
+                c.setRequestProperty("User-Agent", "KarimaTrinityAI/3.0")
+                c.connectTimeout = 5000
+                c.readTimeout = 5000
+                val data = JSONObject(c.inputStream.bufferedReader().readText())
+                val cur = data.getJSONArray("current_condition").getJSONObject(0)
+                val tempC = cur.optString("temp_C", "30")
+                val feels = cur.optString("FeelsLikeC", tempC)
+                val humidity = cur.optString("humidity", "70")
+                val desc = cur.getJSONArray("weatherDesc").getJSONObject(0).optString("value", "Clear")
+                val tempNum = tempC.toFloatOrNull() ?: 30f
+                val tip = if (tempNum >= 28f) "হালকা সুতি পোশাক পরুন" else "হালকা জ্যাকেট বা চাদর সাথে রাখুন"
+                val prefix = if (personaMode() == "karima") "জান, " else ""
+                summary = "$prefix$city-র বর্তমান তাপমাত্রা $tempC°C (অনুভূত $feels°C), আবহাওয়া $desc এবং আর্দ্রতা $humidity%। পরামর্শ: $tip।"
+            } catch (e: Exception) {
+                summary = "$city-র লাইভ আবহাওয়া এখন পাওয়া যায়নি (${e.message ?: "নেটওয়ার্ক সমস্যা"})।"
+            }
+            runOnUiThread {
+                add(personaBadge(), "🌤️ $summary")
+                speakMixed(summary)
+            }
+        }
+        return null
+    }
+
+    private fun runMacro(v: String): String? {
+        val parts = v.split("|", limit = 2)
+        val macroName = parts[0].trim().lowercase()
+        val prompt = parts.getOrElse(1) { "" }.trim()
+        val s = acc() ?: return noAcc
+        addTrace("Maya Macro", "$macroName -> $prompt")
+        return when {
+            macroName.contains("chatgpt") -> {
+                openApp("ChatGPT")?.let { return it }
+                ui.postDelayed({
+                    s.clickText("New chat")
+                    ui.postDelayed({
+                        if (prompt.isNotEmpty()) {
+                            s.typeText(if (macroName.contains("image")) "Create an image: $prompt" else prompt)
+                            ui.postDelayed({ s.clickText("Send Message") }, 800L)
+                        }
+                    }, 1800L)
+                }, 3000L)
+                null
+            }
+            macroName.contains("gemini") -> {
+                openApp("Gemini")?.let { return it }
+                ui.postDelayed({
+                    s.clickText("New chat")
+                    ui.postDelayed({
+                        if (prompt.isNotEmpty()) {
+                            s.typeText(prompt)
+                            ui.postDelayed({ s.clickText("Send") }, 800L)
+                        }
+                    }, 1800L)
+                }, 3000L)
+                null
+            }
+            else -> "অজানা ম্যাক্রো: $macroName"
+        }
     }
 
     private fun clickAcc(t: String): String? {
@@ -1447,13 +1725,18 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         recognizer = makeRecognizer(this)
         recognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(p: Bundle?) {
-                status.text = "শুনছি..."
-                startPulse()
+                status.text = "শুনছি জান..."
+                avatar.setState(JarvisHudView.HudState.LISTENING)
             }
             override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(v: Float) {}
+            override fun onRmsChanged(v: Float) {
+                avatar.setAudioLevel(v)
+            }
             override fun onBufferReceived(b: ByteArray?) {}
-            override fun onEndOfSpeech() { status.text = "ভাবছি..." }
+            override fun onEndOfSpeech() { 
+                status.text = "ভাবছি জান..."
+                avatar.setState(JarvisHudView.HudState.THINKING)
+            }
             override fun onPartialResults(p: Bundle?) {}
             override fun onEvent(t: Int, p: Bundle?) {}
             override fun onError(e: Int) {
@@ -1620,7 +1903,6 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
-        pulse?.cancel()
         recognizer?.destroy()
         tts?.shutdown()
         stopAudio()
