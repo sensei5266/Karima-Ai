@@ -1058,8 +1058,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             text = "TRINITY // KARIMA"
             textSize = 17f
             setTextColor(Color.parseColor("#00F2FE"))
-            typeface = Typeface.MONOSPACE
-            isFakeBoldText = true
+            setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
         }
         val notesChip = TextView(this).apply {
             text = "📝"
